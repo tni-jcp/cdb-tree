@@ -306,14 +306,15 @@
     </div>
     <div id="network"></div>
     <div class="legend">
-      <span><i class="swatch" style="background:#2b4c7d"></i> Male</span>
-      <span><i class="swatch" style="background:#8e2f56"></i> Female</span>
-      <span><i class="swatch" style="background:var(--accent)"></i> Gender unknown</span>
-      <span><i class="swatch" style="background:var(--branch)"></i> Branch</span>
+      <span><i class="swatch" style="background:#2b4c7d"></i> Male (bottom half)</span>
+      <span><i class="swatch" style="background:#8e2f56"></i> Female (bottom half)</span>
+      <span><i class="swatch" style="background:var(--accent)"></i> Gender/branch unknown</span>
+      <span><i class="swatch" style="background:var(--ink-soft)"></i> Founding Father</span>
       <span><i class="swatch" style="background:var(--spouse)"></i> Spouse</span>
       <span><i class="swatch" style="background:var(--sibling)"></i> Sibling</span>
       <span><i class="swatch" style="background:var(--ink-soft)"></i> Parent / Child</span>
     </div>
+    <div class="legend" id="branchLegend"></div>
   </div>
 </main>
 
@@ -321,7 +322,7 @@
 // ---------------------------------------------------------------------------
 // API SETTINGS — point this at your deployed backend (see app.py / README)
 // ---------------------------------------------------------------------------
-const API_BASE_URL = "https://cdb-api.onrender.com";
+const API_BASE_URL = "https://cdb-api.onrender.com/";
 // ---------------------------------------------------------------------------
 
 const statusEl = document.getElementById("status");
@@ -498,12 +499,21 @@ async function attemptSearch() {
       return;
     }
 
-    const { people, rels, topmost, branch, root_chain_people, root_chain_rels, branches_spanned } = data;
+    const {
+      people, rels, topmost, branch,
+      root_chain_people, root_chain_rels,
+      founder_gin, founder_children,
+      branches_spanned,
+    } = data;
 
     renderChain(people, rels);
     renderTopmost(topmost, branch);
     renderBranchNote(branches_spanned);
-    lastGraphArgs = { people, rels, topmost, branch, rootChainPeople: root_chain_people, rootChainRels: root_chain_rels };
+    lastGraphArgs = {
+      people, rels, topmost, branch,
+      rootChainPeople: root_chain_people, rootChainRels: root_chain_rels,
+      founderGin: founder_gin, founderChildren: founder_children,
+    };
     renderGraph(lastGraphArgs);
 
     statusEl.className = "ok";
@@ -585,11 +595,80 @@ function renderBranchNote(branchesSpanned) {
   el.classList.add("show");
 }
 
-function nodeColor(gender) {
+function genderColor(gender) {
   const g = (gender || "").trim().toUpperCase();
-  if (g === "M") return { background: "#2b4c7d", border: getCss("--ink") };   // blue
-  if (g === "F") return { background: "#8e2f56", border: getCss("--ink") };   // dark pink
-  return { background: getCss("--accent"), border: getCss("--ink") };          // gender unknown
+  if (g === "M") return "#2b4c7d";   // blue
+  if (g === "F") return "#8e2f56";   // dark pink
+  return getCss("--accent");          // gender unknown
+}
+
+// A small fixed palette, assigned to a branch_id by a stable string hash — so
+// the same branch always gets the same color on every render (this session
+// and future ones), without needing to hardcode the family's actual branch
+// codes (which weren't fully confirmed against real book data — see the
+// Data Load Template's notes). Collisions are possible if there are ever more
+// distinct branches than palette entries, but with 8 slots against the
+// family's ~4 branches that's unlikely in practice.
+const BRANCH_COLOR_PALETTE = [
+  "#2f6e4f", "#a5672f", "#5b3e8a", "#1f7a8c",
+  "#8a3f5b", "#4f5b8a", "#6b7a3f", "#7a3f6b",
+];
+function branchColor(branchId) {
+  if (!branchId) return getCss("--accent"); // no branch on record
+  let hash = 0;
+  for (let i = 0; i < branchId.length; i++) {
+    hash = (hash * 31 + branchId.charCodeAt(i)) >>> 0;
+  }
+  return BRANCH_COLOR_PALETTE[hash % BRANCH_COLOR_PALETTE.length];
+}
+
+// Custom vis-network node shapes (shape: "custom" + ctxRenderer), since the
+// built-in shapes can't render a half-and-half circle. Both return a
+// drawNode() callback plus nodeDimensions so vis-network sizes/anchors edges
+// correctly. Label rendering is handled separately by vis-network itself
+// (same as any other shape) — these only draw the circle body.
+function makeSplitCircleRenderer(topColor, bottomColor, borderColor, radius) {
+  return function ({ ctx, x, y }) {
+    return {
+      drawNode: function () {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.save();
+        ctx.clip();
+        ctx.fillStyle = topColor;
+        ctx.fillRect(x - radius, y - radius, radius * 2, radius);
+        ctx.fillStyle = bottomColor;
+        ctx.fillRect(x - radius, y, radius * 2, radius);
+        ctx.restore();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = borderColor;
+        ctx.stroke();
+        ctx.restore();
+      },
+      nodeDimensions: { width: radius * 2, height: radius * 2 },
+    };
+  };
+}
+function makeSolidCircleRenderer(fillColor, borderColor, radius) {
+  return function ({ ctx, x, y }) {
+    return {
+      drawNode: function () {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = borderColor;
+        ctx.stroke();
+        ctx.restore();
+      },
+      nodeDimensions: { width: radius * 2, height: radius * 2 },
+    };
+  };
 }
 
 // Converts a GEN_CD value ("0" for the root, "A", "B", "C"... per generation)
@@ -668,30 +747,41 @@ function computeGraphLayout(nodesData) {
   });
 }
 
-function renderGraph({ people, rels, topmost, branch, rootChainPeople, rootChainRels }) {
+function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin, founderChildren }) {
   // The founder climb (rootChainPeople/rootChainRels) extends the same chain
   // that ends at `topmost` — climb_to_founder's first returned relationship
   // connects topmost itself to its immediate ancestor, so merging these two
-  // sets is a plain concat, no extra bridging needed.
-  const allPeople = people.concat(rootChainPeople || []);
-  const allRels = rels.concat(rootChainRels || []);
+  // sets is a plain concat, no extra bridging needed. founderChildren adds
+  // the founder's OTHER children (e.g. the other branch founders) that
+  // aren't otherwise part of the two searched people's own connecting path —
+  // only present when the climb genuinely reached the true founder.
+  const extraPeople = (founderChildren || []).map((fc) => fc.person);
+  const extraRels = (founderChildren || []).map((fc) => fc.rel);
+  const allPeople = people.concat(rootChainPeople || []).concat(extraPeople);
+  const allRels = rels.concat(rootChainRels || []).concat(extraRels);
 
   const nodes = [];
   const edges = [];
   const seen = new Set();
   const levels = computeLevels(allPeople, allRels);
+  const NODE_RADIUS = 16;
 
   allPeople.forEach((p) => {
     const id = p.elementId;
     if (seen.has(id)) return;
     seen.add(id);
+
+    const isFounder = founderGin && p.gin === founderGin;
+    const ctxRenderer = isFounder
+      ? makeSolidCircleRenderer(getCss("--ink-soft"), getCss("--ink"), NODE_RADIUS)
+      : makeSplitCircleRenderer(branchColor(p.branch_code), genderColor(p.gender), getCss("--ink"), NODE_RADIUS);
+
     nodes.push({
       id,
       label: p.name || p.gin,
       level: levels[id],
-      shape: "dot",
-      size: 16,
-      color: nodeColor(p.gender),
+      shape: "custom",
+      ctxRenderer,
       font: { color: getCss("--ink"), face: "Georgia" },
     });
   });
@@ -701,7 +791,17 @@ function renderGraph({ people, rels, topmost, branch, rootChainPeople, rootChain
   // people[i+1]"; we draw exactly what's stored in the graph, so a PARENT_OF
   // (shown as FATHER OF / MOTHER OF) arrow always points from the real parent
   // to the real child, regardless of which way the path was traversed.
+  //
+  // Deduplicated by (from, to, type): founderChildren now deliberately
+  // includes ALL of the founder's children — including whichever one is
+  // already an ancestor on the main path — so every child can get its own
+  // branch box. That means the same PARENT_OF edge can arrive twice (once via
+  // root_chain_rels, once via founderChildren); this Set keeps only one.
+  const seenEdgeKey = new Set();
   allRels.forEach((r) => {
+    const key = `${r.startNodeElementId}|${r.endNodeElementId}|${r.type}`;
+    if (seenEdgeKey.has(key)) return;
+    seenEdgeKey.add(key);
     edges.push({
       from: r.startNodeElementId,
       to: r.endNodeElementId,
@@ -712,32 +812,43 @@ function renderGraph({ people, rels, topmost, branch, rootChainPeople, rootChain
     });
   });
 
-  // The Branch box attaches to the apex of whatever we're showing: the top of
-  // the founder climb if we have one, otherwise the shared ancestor itself.
-  const apex = (rootChainPeople && rootChainPeople.length)
-    ? rootChainPeople[rootChainPeople.length - 1]
-    : topmost;
-
-  if (branch && apex) {
-    const branchId = "branch_" + branch.elementId;
-    const minLevel = Math.min(...Object.values(levels));
+  const addedBranchIds = new Set();
+  const branchesUsed = []; // {branch_name, color} — feeds the dynamic per-query legend below
+  function addBranchBox(personElementId, branchInfo, level) {
+    if (!branchInfo) return;
+    const branchId = "branch_" + branchInfo.elementId;
+    if (addedBranchIds.has(branchId)) return; // two children sharing a branch code, just in case
+    addedBranchIds.add(branchId);
+    const color = branchColor(branchInfo.branch_id);
+    branchesUsed.push({ name: branchInfo.branch_name, color });
     nodes.push({
       id: branchId,
-      label: branch.branch_name,
-      level: minLevel - 1, // pinned one row above the apex, regardless of tree depth
+      label: branchInfo.branch_name,
+      level,
       shape: "box",
-      color: { background: getCss("--branch"), border: getCss("--ink") },
+      color: { background: color, border: getCss("--ink") },
       font: { color: "#fff", face: "Georgia" },
     });
     edges.push({
-      from: apex.elementId,
+      from: personElementId,
       to: branchId,
       label: "BELONGS TO",
       dashes: true,
-      color: { color: getCss("--branch") },
+      color: { color },
       font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
     });
   }
+
+  // Branch boxes ONLY ever attach to a confirmed direct child of the founder
+  // (the "top parent" of that branch) — never to an arbitrary node further
+  // down the searched path. If the climb didn't confirm reaching the true
+  // founder (climb_to_founder's reached_founder was False), founderChildren
+  // is empty and no branch box is shown at all, rather than falling back to
+  // labeling some other node's branch.
+  if (founderChildren && founderChildren.length) {
+    founderChildren.forEach((fc) => addBranchBox(fc.person.elementId, fc.branch, levels[fc.person.elementId]));
+  }
+  renderBranchLegend(branchesUsed);
 
   computeGraphLayout(nodes);
 
@@ -752,6 +863,35 @@ function renderGraph({ people, rels, topmost, branch, rootChainPeople, rootChain
   };
   if (network) network.destroy();
   network = new vis.Network(container, data, options);
+}
+
+// Populates the dynamic per-query branch-color key below the graph — the
+// top-half node color and branch box color are assigned per branch (via
+// branchColor()), and this tells the viewer which color means which branch
+// for the specific relationship just shown, since that mapping can vary
+// query to query depending on which branches happen to appear.
+function renderBranchLegend(branchesUsed) {
+  const el = document.getElementById("branchLegend");
+  el.innerHTML = "";
+  if (!branchesUsed || branchesUsed.length === 0) return;
+
+  const label = document.createElement("span");
+  label.textContent = "Branch (top half of node):";
+  label.style.fontStyle = "italic";
+  el.appendChild(label);
+
+  const seenNames = new Set();
+  branchesUsed.forEach(({ name, color }) => {
+    if (seenNames.has(name)) return;
+    seenNames.add(name);
+    const span = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.style.background = color;
+    span.appendChild(swatch);
+    span.appendChild(document.createTextNode(" " + name));
+    el.appendChild(span);
+  });
 }
 
 
