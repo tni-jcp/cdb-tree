@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chalakuzhy Genealogy — Relationship Finder</title>
+
+<!-- PWA install support -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#7a3b2e">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chalakuzhy Tree">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/10.1.0/standalone/umd/vis-network.min.js"></script>
+<style>
+  :root {
+    --paper: #f2ead9;
+    --paper-dark: #e6d9bd;
+    --ink: #2b241a;
+    --ink-soft: #6b5d47;
+    --line: #c9b98e;
+    --accent: #7a3b2e;
+    --accent-soft: #a85c3f;
+    --spouse: #4f6b53;
+    --sibling: #8a6d3b;
+    --branch: #35506b;
+    --error: #a3352b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(107,93,71,0.05) 28px);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    min-height: 100vh;
+  }
+  header {
+    padding: 2.2rem 2rem 1rem;
+    border-bottom: 3px double var(--line);
+    text-align: center;
+  }
+  header .eyebrow {
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    font-family: Georgia, serif;
+  }
+  header h1 {
+    margin: 0.3rem 0 0.2rem;
+    font-size: 2rem;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+  }
+  header p.sub {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    font-style: italic;
+  }
+  main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 1.5rem 2rem 3rem;
+  }
+  .config-note {
+    background: rgba(122,59,46,0.08);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0.7rem 1rem;
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    margin-bottom: 1.4rem;
+  }
+  .config-note code {
+    background: rgba(0,0,0,0.06);
+    padding: 0.05rem 0.3rem;
+    border-radius: 2px;
+  }
+  form.search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: end;
+    background: rgba(255,255,255,0.35);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1.2rem;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 220px; }
+  .field label {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .field input {
+    font-family: inherit;
+    font-size: 1rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #fffdf7;
+    color: var(--ink);
+  }
+  .field input:focus {
+    outline: 2px solid var(--accent-soft);
+    outline-offset: 1px;
+  }
+  button.go {
+    font-family: inherit;
+    font-size: 0.95rem;
+    letter-spacing: 0.04em;
+    padding: 0.6rem 1.4rem;
+    background: var(--accent);
+    color: var(--paper);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.go:hover { background: var(--accent-soft); }
+  button.go:disabled { background: var(--ink-soft); cursor: progress; }
+
+  #status {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+    min-height: 1.4em;
+  }
+  #status.error { color: var(--error); }
+  #status.ok { color: var(--ink-soft); }
+
+  #result-panel { margin-top: 1.5rem; display: none; }
+  .summary-card {
+    background: rgba(255,255,255,0.5);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: 3px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 1rem;
+  }
+  .summary-card .chain {
+    font-size: 1.05rem;
+    line-height: 1.9;
+  }
+  .summary-card .chain .rel {
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0.35rem;
+  }
+  .summary-card .topmost {
+    margin-top: 0.6rem;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+  }
+  .summary-card .topmost strong { color: var(--branch); }
+
+  #network {
+    width: 100%;
+    height: 460px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fffdf7;
+  }
+
+  .legend {
+    display: flex;
+    gap: 1.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.8rem;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  .candidates {
+    display: none;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+    padding: 0.6rem;
+    background: rgba(122,59,46,0.06);
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+  }
+  .candidates.show { display: flex; }
+  .candidates .hint {
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.1rem;
+  }
+  .candidate-btn {
+    text-align: left;
+    font-family: inherit;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #fffdf7;
+    color: var(--ink);
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .candidate-btn:hover { background: rgba(122,59,46,0.1); }
+  .candidate-btn.selected {
+    background: var(--accent);
+    color: var(--paper);
+    border-color: var(--accent);
+  }
+  .candidate-btn .meta {
+    font-size: 0.72rem;
+    opacity: 0.75;
+    display: block;
+    margin-top: 0.1rem;
+  }
+  .field.resolved input {
+    border-color: var(--accent-soft);
+    background: #fbf4e6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Chalakuzhy Family Register</div>
+  <h1>Relationship Finder</h1>
+  <p class="sub">Trace the shortest thread of kinship between any two members</p>
+</header>
+
+<main>
+  <div class="config-note">
+    This app talks to the Chalakuzhy Family Register API — set <code>API_BASE_URL</code> at the
+    top of the <code>&lt;script&gt;</code> block below to your deployed API's URL. Unlike an
+    earlier version of this tool, no database password is stored in this page — Neo4j Aura
+    credentials live only on the backend server, so this file is safe to install on any family
+    member's phone. Name matching is fuzzy (typo-tolerant) — if a name matches more than one
+    person, you'll be asked to pick which one you meant before the relationship search runs.
+  </div>
+
+  <form class="search" id="searchForm">
+    <div class="field" id="field1">
+      <label for="name1">Person 1</label>
+      <input type="text" id="name1" placeholder="e.g. Mammen (typos OK)" required autocomplete="off">
+      <div class="candidates" id="candidates1"></div>
+    </div>
+    <div class="field" id="field2">
+      <label for="name2">Person 2</label>
+      <input type="text" id="name2" placeholder="e.g. Cherian (typos OK)" required autocomplete="off">
+      <div class="candidates" id="candidates2"></div>
+    </div>
+    <button type="submit" class="go" id="goBtn">Find relationship</button>
+  </form>
+
+  <div id="status"></div>
+
+  <div id="result-panel">
+    <div class="summary-card">
+      <div class="chain" id="chainText"></div>
+      <div class="topmost" id="topmostText"></div>
+    </div>
+    <div id="network"></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--accent)"></i> Person in path</span>
+      <span><i class="swatch" style="background:var(--branch)"></i> Branch</span>
+      <span><i class="swatch" style="background:var(--spouse)"></i> SPOUSE_OF</span>
+      <span><i class="swatch" style="background:var(--sibling)"></i> SIBLING_OF</span>
+      <span><i class="swatch" style="background:var(--ink-soft)"></i> PARENT_OF</span>
+    </div>
+  </div>
+</main>
+
+<script>
+// ---------------------------------------------------------------------------
+// API SETTINGS — point this at your deployed backend (see app.py / README)
+// ---------------------------------------------------------------------------
+const API_BASE_URL = "https://cdb-api.onrender.com";
+// ---------------------------------------------------------------------------
+
+const statusEl = document.getElementById("status");
+const resultPanel = document.getElementById("result-panel");
+const chainText = document.getElementById("chainText");
+const topmostText = document.getElementById("topmostText");
+const goBtn = document.getElementById("goBtn");
+const name1Input = document.getElementById("name1");
+const name2Input = document.getElementById("name2");
+const field1 = document.getElementById("field1");
+const field2 = document.getElementById("field2");
+const candidates1 = document.getElementById("candidates1");
+const candidates2 = document.getElementById("candidates2");
+
+let network = null;
+
+// Resolution state per field: the gin the user has confirmed, and the input text
+// it was resolved from (so an edit to the text invalidates the cached resolution).
+const resolved = {
+  1: { gin: null, label: null, forText: null },
+  2: { gin: null, label: null, forText: null },
+};
+
+function relColor(type) {
+  if (type === "SPOUSE_OF") return getCss("--spouse");
+  if (type === "SIBLING_OF") return getCss("--sibling");
+  return getCss("--ink-soft"); // PARENT_OF
+}
+function getCss(varName) {
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
+function showError(message) {
+  statusEl.className = "error";
+  statusEl.textContent = message;
+}
+
+function clearResolution(fieldNum) {
+  resolved[fieldNum] = { gin: null, label: null, forText: null };
+  const fieldEl = fieldNum === 1 ? field1 : field2;
+  const candEl = fieldNum === 1 ? candidates1 : candidates2;
+  fieldEl.classList.remove("resolved");
+  candEl.classList.remove("show");
+  candEl.innerHTML = "";
+}
+
+// Reset a field's cached resolution whenever its text changes, so a stale
+// selection from a previous search never silently carries over.
+name1Input.addEventListener("input", () => clearResolution(1));
+name2Input.addEventListener("input", () => clearResolution(2));
+
+function renderCandidates(fieldNum, text, candidates) {
+  const candEl = fieldNum === 1 ? candidates1 : candidates2;
+  candEl.innerHTML = "";
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = `Multiple matches for "${text}" — choose one:`;
+  candEl.appendChild(hint);
+
+  candidates.forEach((node) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "candidate-btn";
+    const displayName = node.name || node.gin;
+    const nickname = node.nickname ? ` (${node.nickname})` : "";
+    btn.innerHTML = `${escapeHtml(displayName)}${escapeHtml(nickname)}` +
+      `<span class="meta">${escapeHtml(node.gin)} · ${escapeHtml(node.branch_name || "no branch on record")} · gen ${escapeHtml(node.generation_code || "?")}</span>`;
+    btn.addEventListener("click", () => {
+      [...candEl.querySelectorAll(".candidate-btn")].forEach((b) => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      resolved[fieldNum] = { gin: node.gin, label: displayName, forText: text };
+      (fieldNum === 1 ? field1 : field2).classList.add("resolved");
+      // Re-attempt the full search now that this field is resolved — if the
+      // other field is already resolved (or a single unambiguous match), the
+      // relationship search runs immediately without an extra button click.
+      attemptSearch();
+    });
+    candEl.appendChild(btn);
+  });
+  candEl.classList.add("show");
+}
+
+// Builds an absolute API URL. Falls back to the current page's own origin if
+// API_BASE_URL is left blank, so this also works if you reverse-proxy the API
+// under the same domain as the frontend instead of a separate host.
+function apiUrl(path, params) {
+  const base = API_BASE_URL && API_BASE_URL.trim() ? API_BASE_URL : window.location.origin;
+  const url = new URL(path, base);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  return url.toString();
+}
+
+async function apiGet(path, params) {
+  const resp = await fetch(apiUrl(path, params));
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try {
+      const body = await resp.json();
+      detail = body.detail || detail;
+    } catch (_) {
+      // response wasn't JSON — fall back to statusText already set above
+    }
+    throw new Error(`${resp.status} ${detail}`);
+  }
+  return resp.json();
+}
+
+// Resolve one field's free-text input to a specific member gin. Returns
+// {status: "resolved"} | {status: "ambiguous"} | {status: "none"}.
+async function resolveField(fieldNum, text) {
+  const cache = resolved[fieldNum];
+  if (cache.gin && cache.forText === text) {
+    return { status: "resolved" };
+  }
+
+  const data = await apiGet("/api/search", { q: text });
+  const candidates = data.candidates || [];
+
+  if (candidates.length === 0) {
+    clearResolution(fieldNum);
+    return { status: "none" };
+  }
+
+  if (candidates.length === 1) {
+    const node = candidates[0];
+    const displayName = node.name || node.gin;
+    resolved[fieldNum] = { gin: node.gin, label: displayName, forText: text };
+    (fieldNum === 1 ? field1 : field2).classList.add("resolved");
+    (fieldNum === 1 ? candidates1 : candidates2).classList.remove("show");
+    return { status: "resolved" };
+  }
+
+  renderCandidates(fieldNum, text, candidates);
+  return { status: "ambiguous" };
+}
+
+async function attemptSearch() {
+  const text1 = name1Input.value.trim();
+  const text2 = name2Input.value.trim();
+  if (!text1 || !text2) return;
+
+  goBtn.disabled = true;
+  statusEl.className = "";
+  statusEl.textContent = "Resolving names...";
+  resultPanel.style.display = "none";
+
+  try {
+    const r1 = await resolveField(1, text1);
+    if (r1.status === "none") {
+      showError(`No members found matching "${text1}".`);
+      return;
+    }
+    const r2 = await resolveField(2, text2);
+    if (r2.status === "none") {
+      showError(`No members found matching "${text2}".`);
+      return;
+    }
+
+    if (r1.status === "ambiguous" || r2.status === "ambiguous") {
+      statusEl.className = "ok";
+      statusEl.textContent = "Multiple matches found — pick from the list(s) above to continue.";
+      return;
+    }
+
+    statusEl.textContent = `Searching for a path between "${resolved[1].label}" and "${resolved[2].label}"...`;
+    const data = await apiGet("/api/relationship", { gin1: resolved[1].gin, gin2: resolved[2].gin });
+
+    if (!data.found) {
+      showError(
+        `No connecting path found between "${resolved[1].label}" and "${resolved[2].label}". ` +
+        `They may be in unconnected parts of the tree, or one may be a data-entry gap.`
+      );
+      return;
+    }
+
+    const { people, rels, topmost, branch } = data;
+
+    renderChain(people, rels);
+    renderTopmost(topmost, branch);
+    renderGraph(people, rels, topmost, branch);
+
+    statusEl.className = "ok";
+    statusEl.textContent = `Found a path with ${rels.length} step(s).`;
+    resultPanel.style.display = "block";
+
+  } catch (err) {
+    showError("Connection or query error: " + err.message);
+    console.error(err);
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+
+document.getElementById("searchForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  attemptSearch();
+});
+
+// Renders the "A — PARENT OF → B" narrative line. Direction is read from each
+// relationship's own startNodeElementId — NOT assumed from list order — because
+// shortestPath() can traverse a PARENT_OF edge in either direction (e.g. walking
+// from a child up to a parent is a perfectly valid shortest-path step).
+function renderChain(people, rels) {
+  let html = "";
+  people.forEach((p, i) => {
+    html += `<strong>${escapeHtml(p.name || p.gin)}</strong>`;
+    if (i < rels.length) {
+      const r = rels[i];
+      const label = r.type.replace("_", " ");
+      if (r.type !== "PARENT_OF") {
+        html += `<span class="rel">— ${label} —</span>`;
+      } else if (r.startNodeElementId === p.elementId) {
+        // p (people[i]) is the actual parent — arrow points forward, correctly.
+        html += `<span class="rel">— ${label} →</span>`;
+      } else {
+        // p (people[i]) is the actual child — the parent is people[i+1], so the
+        // arrow must point back toward p, not forward.
+        html += `<span class="rel">← ${label} —</span>`;
+      }
+    }
+  });
+  chainText.innerHTML = html;
+}
+
+function renderTopmost(topmost, branch) {
+  const name = topmost ? (topmost.name || topmost.gin) : "Unknown";
+  const branchName = branch ? branch.branch_name : "no branch on record";
+  topmostText.innerHTML = `Topmost (common ancestor) node: <strong>${escapeHtml(name)}</strong> — branch: <strong>${escapeHtml(branchName)}</strong>`;
+}
+
+// Converts a GEN_CD value ("0" for the root, "A", "B", "C"... per generation)
+// into a numeric depth for the hierarchical layout. Returns null if the format
+// is unrecognized (e.g. a placeholder member with no generation_code at all).
+function generationToLevel(generationCode) {
+  if (!generationCode) return null;
+  const code = String(generationCode).trim().toUpperCase();
+  if (code === "0") return 0;
+  if (/^[A-Z]$/.test(code)) return code.charCodeAt(0) - 64; // A=1, B=2, ... Z=26
+  return null;
+}
+
+// Most members have a generation_code and get a level directly. Placeholder
+// members (married-in spouses with no book entry) don't — this fills those in
+// by propagating levels across the path's relationships: a spouse takes their
+// partner's level (same generation, side by side), and PARENT_OF pushes the
+// level down/up by exactly one. Runs to a fixed point since a path can chain
+// several unresolved nodes together.
+function computeLevels(people, rels) {
+  const levels = {};
+  people.forEach((p) => {
+    const lvl = generationToLevel(p.generation_code);
+    if (lvl !== null) levels[p.elementId] = lvl;
+  });
+
+  let changed = true;
+  let guard = 0;
+  while (changed && guard < 20) {
+    changed = false;
+    guard++;
+    rels.forEach((r) => {
+      const s = r.startNodeElementId, e = r.endNodeElementId;
+      const sameLevel = r.type !== "PARENT_OF"; // SPOUSE_OF / SIBLING_OF sit on the same row
+      if (levels[s] !== undefined && levels[e] === undefined) {
+        levels[e] = sameLevel ? levels[s] : levels[s] + 1;
+        changed = true;
+      } else if (levels[e] !== undefined && levels[s] === undefined) {
+        levels[s] = sameLevel ? levels[e] : levels[e] - 1;
+        changed = true;
+      }
+    });
+  }
+
+  // Anything still unresolved (shouldn't normally happen for a connected path)
+  // falls back to level 0 rather than being left undefined.
+  people.forEach((p) => {
+    if (levels[p.elementId] === undefined) levels[p.elementId] = 0;
+  });
+  return levels;
+}
+
+function renderGraph(people, rels, topmost, branch) {
+  const nodes = [];
+  const edges = [];
+  const seen = new Set();
+  const levels = computeLevels(people, rels);
+
+  people.forEach((p) => {
+    const id = p.elementId;
+    if (seen.has(id)) return;
+    seen.add(id);
+    nodes.push({
+      id,
+      label: p.name || p.gin,
+      level: levels[id],
+      shape: "dot",
+      size: 16,
+      color: { background: getCss("--accent"), border: getCss("--ink") },
+      font: { color: getCss("--ink"), face: "Georgia" },
+    });
+  });
+
+  // Draw each edge using the relationship's own true start/end — this is what
+  // actually fixes the direction bug. We no longer assume "from people[i] to
+  // people[i+1]"; we draw exactly what's stored in the graph, so a PARENT_OF
+  // arrow always points from the real parent to the real child, regardless of
+  // which way shortestPath happened to walk over it.
+  rels.forEach((r) => {
+    edges.push({
+      from: r.startNodeElementId,
+      to: r.endNodeElementId,
+      label: r.type.replace("_", " "),
+      color: { color: relColor(r.type) },
+      font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
+      arrows: r.type === "PARENT_OF" ? "to" : "",
+    });
+  });
+
+  if (branch && topmost) {
+    const branchId = "branch_" + branch.elementId;
+    const minLevel = Math.min(...Object.values(levels));
+    nodes.push({
+      id: branchId,
+      label: branch.branch_name,
+      level: minLevel - 1, // pinned one row above the topmost person, regardless of tree depth
+      shape: "box",
+      color: { background: getCss("--branch"), border: getCss("--ink") },
+      font: { color: "#fff", face: "Georgia" },
+    });
+    edges.push({
+      from: topmost.elementId,
+      to: branchId,
+      label: "BELONGS TO",
+      dashes: true,
+      color: { color: getCss("--branch") },
+      font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
+    });
+  }
+
+  const container = document.getElementById("network");
+  const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+  const options = {
+    layout: {
+      hierarchical: {
+        enabled: true,
+        direction: "UD",          // oldest generation at top, descendants below
+        levelSeparation: 130,
+        nodeSpacing: 160,
+        treeSpacing: 200,
+        blockShifting: true,
+        edgeMinimization: true,
+        parentCentralization: true,
+      },
+    },
+    physics: { enabled: false },   // layout is now driven by generation level, not simulation
+    interaction: { hover: true, zoomView: true, dragView: true },
+    edges: {
+      smooth: { type: "cubicBezier", forceDirection: "vertical", roundness: 0.4 },
+    },
+  };
+  if (network) network.destroy();
+  network = new vis.Network(container, data, options);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// --- PWA: register the service worker for install support + offline shell ---
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => {
+      console.warn("Service worker registration failed:", err);
+    });
+  });
+}
+</script>
+
+
+</body>
+</html>
