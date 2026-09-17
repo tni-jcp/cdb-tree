@@ -161,6 +161,41 @@
   }
   .summary-card .topmost strong { color: var(--branch); }
 
+  .summary-card .branch-note {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--branch);
+    display: none;
+  }
+  .summary-card .branch-note.show { display: block; }
+
+  .network-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    margin-top: 1rem;
+    margin-bottom: 0.4rem;
+  }
+  .network-hint {
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+  .reset-btn {
+    font-family: inherit;
+    font-size: 0.78rem;
+    padding: 0.35rem 0.8rem;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent-soft);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .reset-btn:hover { background: rgba(122,59,46,0.08); }
+
   #network {
     width: 100%;
     height: 460px;
@@ -238,12 +273,9 @@
 
 <main>
   <div class="config-note">
-    This app talks to the Chalakuzhy Family Register API — set <code>API_BASE_URL</code> at the
-    top of the <code>&lt;script&gt;</code> block below to your deployed API's URL. Unlike an
-    earlier version of this tool, no database password is stored in this page — Neo4j Aura
-    credentials live only on the backend server, so this file is safe to install on any family
-    member's phone. Name matching is fuzzy (typo-tolerant) — if a name matches more than one
-    person, you'll be asked to pick which one you meant before the relationship search runs.
+    This app talks to the Chalakuzhy Family Register and does a fuzzy match (typo-tolerant)
+    against any two member names entered — if a name matches more than one person, you'll be
+    asked to pick which one you meant before the relationship search runs.
   </div>
 
   <form class="search" id="searchForm">
@@ -266,14 +298,21 @@
     <div class="summary-card">
       <div class="chain" id="chainText"></div>
       <div class="topmost" id="topmostText"></div>
+      <div class="branch-note" id="branchNote"></div>
+    </div>
+    <div class="network-toolbar">
+      <span class="network-hint">Drag any node to rearrange the tree.</span>
+      <button type="button" class="reset-btn" id="resetLayoutBtn">Reset arrangement</button>
     </div>
     <div id="network"></div>
     <div class="legend">
-      <span><i class="swatch" style="background:var(--accent)"></i> Person in path</span>
+      <span><i class="swatch" style="background:#2b4c7d"></i> Male</span>
+      <span><i class="swatch" style="background:#8e2f56"></i> Female</span>
+      <span><i class="swatch" style="background:var(--accent)"></i> Gender unknown</span>
       <span><i class="swatch" style="background:var(--branch)"></i> Branch</span>
-      <span><i class="swatch" style="background:var(--spouse)"></i> SPOUSE_OF</span>
-      <span><i class="swatch" style="background:var(--sibling)"></i> SIBLING_OF</span>
-      <span><i class="swatch" style="background:var(--ink-soft)"></i> PARENT_OF</span>
+      <span><i class="swatch" style="background:var(--spouse)"></i> Spouse</span>
+      <span><i class="swatch" style="background:var(--sibling)"></i> Sibling</span>
+      <span><i class="swatch" style="background:var(--ink-soft)"></i> Parent / Child</span>
     </div>
   </div>
 </main>
@@ -298,6 +337,7 @@ const candidates1 = document.getElementById("candidates1");
 const candidates2 = document.getElementById("candidates2");
 
 let network = null;
+let lastGraphArgs = null; // used by the "Reset arrangement" button to redraw the tidy layout
 
 // Resolution state per field: the gin the user has confirmed, and the input text
 // it was resolved from (so an edit to the text invalidates the cached resolution).
@@ -458,11 +498,13 @@ async function attemptSearch() {
       return;
     }
 
-    const { people, rels, topmost, branch } = data;
+    const { people, rels, topmost, branch, root_chain_people, root_chain_rels, branches_spanned } = data;
 
     renderChain(people, rels);
     renderTopmost(topmost, branch);
-    renderGraph(people, rels, topmost, branch);
+    renderBranchNote(branches_spanned);
+    lastGraphArgs = { people, rels, topmost, branch, rootChainPeople: root_chain_people, rootChainRels: root_chain_rels };
+    renderGraph(lastGraphArgs);
 
     statusEl.className = "ok";
     statusEl.textContent = `Found a path with ${rels.length} step(s).`;
@@ -481,6 +523,12 @@ document.getElementById("searchForm").addEventListener("submit", (e) => {
   attemptSearch();
 });
 
+document.getElementById("resetLayoutBtn").addEventListener("click", () => {
+  // Recomputes the tidy generation-based layout from scratch, discarding
+  // wherever the user has dragged nodes to — same data, fresh positions.
+  if (lastGraphArgs) renderGraph(lastGraphArgs);
+});
+
 // Renders the "A — PARENT OF → B" narrative line. Direction is read from each
 // relationship's own startNodeElementId — NOT assumed from list order — because
 // shortestPath() can traverse a PARENT_OF edge in either direction (e.g. walking
@@ -491,7 +539,7 @@ function renderChain(people, rels) {
     html += `<strong>${escapeHtml(p.name || p.gin)}</strong>`;
     if (i < rels.length) {
       const r = rels[i];
-      const label = r.type.replace("_", " ");
+      const label = (r.display_type || r.type).replace(/_/g, " ");
       if (r.type !== "PARENT_OF") {
         html += `<span class="rel">— ${label} —</span>`;
       } else if (r.startNodeElementId === p.elementId) {
@@ -510,7 +558,38 @@ function renderChain(people, rels) {
 function renderTopmost(topmost, branch) {
   const name = topmost ? (topmost.name || topmost.gin) : "Unknown";
   const branchName = branch ? branch.branch_name : "no branch on record";
-  topmostText.innerHTML = `Topmost (common ancestor) node: <strong>${escapeHtml(name)}</strong> — branch: <strong>${escapeHtml(branchName)}</strong>`;
+  topmostText.innerHTML = `Common ancestor: <strong>${escapeHtml(name)}</strong> — branch: <strong>${escapeHtml(branchName)}</strong>`;
+}
+
+// Joins a list of branch names into readable prose: "A", "A and B", or
+// "A, B, and C".
+function joinNames(names) {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+// Only shown when a relationship's full lineage (main path + founder climb)
+// touches more than one branch — e.g. two people connected only via their
+// shared founder, in different branches of the family.
+function renderBranchNote(branchesSpanned) {
+  const el = document.getElementById("branchNote");
+  const names = (branchesSpanned || []).map((b) => b.branch_name).filter(Boolean);
+  if (names.length <= 1) {
+    el.textContent = "";
+    el.classList.remove("show");
+    return;
+  }
+  el.textContent = `This connects the ${joinNames(names)} branches, via the family founder.`;
+  el.classList.add("show");
+}
+
+function nodeColor(gender) {
+  const g = (gender || "").trim().toUpperCase();
+  if (g === "M") return { background: "#2b4c7d", border: getCss("--ink") };   // blue
+  if (g === "F") return { background: "#8e2f56", border: getCss("--ink") };   // dark pink
+  return { background: getCss("--accent"), border: getCss("--ink") };          // gender unknown
 }
 
 // Converts a GEN_CD value ("0" for the root, "A", "B", "C"... per generation)
@@ -563,13 +642,46 @@ function computeLevels(people, rels) {
   return levels;
 }
 
-function renderGraph(people, rels, topmost, branch) {
+// Computes a tidy initial x/y position per node from its `level` (same
+// generation math as computeLevels), grouping same-level nodes into an evenly
+// spaced row. This replaces vis-network's own hierarchical layout engine,
+// which — critically — keeps nodes locked to their row even while dragging.
+// Giving each node a plain starting x/y (with physics off and no hierarchical
+// layout enabled) makes every node freely draggable anywhere afterward,
+// Bloom-style, while still opening on a clean, readable arrangement.
+function computeGraphLayout(nodesData) {
+  const H_SPACING = 170;
+  const V_SPACING = 130;
+  const byLevel = {};
+  nodesData.forEach((n) => {
+    const lvl = n.level || 0;
+    if (!byLevel[lvl]) byLevel[lvl] = [];
+    byLevel[lvl].push(n);
+  });
+  Object.keys(byLevel).forEach((lvlKey) => {
+    const group = byLevel[lvlKey];
+    const totalWidth = (group.length - 1) * H_SPACING;
+    group.forEach((n, i) => {
+      n.x = i * H_SPACING - totalWidth / 2;
+      n.y = Number(lvlKey) * V_SPACING;
+    });
+  });
+}
+
+function renderGraph({ people, rels, topmost, branch, rootChainPeople, rootChainRels }) {
+  // The founder climb (rootChainPeople/rootChainRels) extends the same chain
+  // that ends at `topmost` — climb_to_founder's first returned relationship
+  // connects topmost itself to its immediate ancestor, so merging these two
+  // sets is a plain concat, no extra bridging needed.
+  const allPeople = people.concat(rootChainPeople || []);
+  const allRels = rels.concat(rootChainRels || []);
+
   const nodes = [];
   const edges = [];
   const seen = new Set();
-  const levels = computeLevels(people, rels);
+  const levels = computeLevels(allPeople, allRels);
 
-  people.forEach((p) => {
+  allPeople.forEach((p) => {
     const id = p.elementId;
     if (seen.has(id)) return;
     seen.add(id);
@@ -579,7 +691,7 @@ function renderGraph(people, rels, topmost, branch) {
       level: levels[id],
       shape: "dot",
       size: 16,
-      color: { background: getCss("--accent"), border: getCss("--ink") },
+      color: nodeColor(p.gender),
       font: { color: getCss("--ink"), face: "Georgia" },
     });
   });
@@ -587,32 +699,38 @@ function renderGraph(people, rels, topmost, branch) {
   // Draw each edge using the relationship's own true start/end — this is what
   // actually fixes the direction bug. We no longer assume "from people[i] to
   // people[i+1]"; we draw exactly what's stored in the graph, so a PARENT_OF
-  // arrow always points from the real parent to the real child, regardless of
-  // which way shortestPath happened to walk over it.
-  rels.forEach((r) => {
+  // (shown as FATHER OF / MOTHER OF) arrow always points from the real parent
+  // to the real child, regardless of which way the path was traversed.
+  allRels.forEach((r) => {
     edges.push({
       from: r.startNodeElementId,
       to: r.endNodeElementId,
-      label: r.type.replace("_", " "),
+      label: (r.display_type || r.type).replace(/_/g, " "),
       color: { color: relColor(r.type) },
       font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
       arrows: r.type === "PARENT_OF" ? "to" : "",
     });
   });
 
-  if (branch && topmost) {
+  // The Branch box attaches to the apex of whatever we're showing: the top of
+  // the founder climb if we have one, otherwise the shared ancestor itself.
+  const apex = (rootChainPeople && rootChainPeople.length)
+    ? rootChainPeople[rootChainPeople.length - 1]
+    : topmost;
+
+  if (branch && apex) {
     const branchId = "branch_" + branch.elementId;
     const minLevel = Math.min(...Object.values(levels));
     nodes.push({
       id: branchId,
       label: branch.branch_name,
-      level: minLevel - 1, // pinned one row above the topmost person, regardless of tree depth
+      level: minLevel - 1, // pinned one row above the apex, regardless of tree depth
       shape: "box",
       color: { background: getCss("--branch"), border: getCss("--ink") },
       font: { color: "#fff", face: "Georgia" },
     });
     edges.push({
-      from: topmost.elementId,
+      from: apex.elementId,
       to: branchId,
       label: "BELONGS TO",
       dashes: true,
@@ -621,23 +739,13 @@ function renderGraph(people, rels, topmost, branch) {
     });
   }
 
+  computeGraphLayout(nodes);
+
   const container = document.getElementById("network");
   const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
   const options = {
-    layout: {
-      hierarchical: {
-        enabled: true,
-        direction: "UD",          // oldest generation at top, descendants below
-        levelSeparation: 130,
-        nodeSpacing: 160,
-        treeSpacing: 200,
-        blockShifting: true,
-        edgeMinimization: true,
-        parentCentralization: true,
-      },
-    },
-    physics: { enabled: false },   // layout is now driven by generation level, not simulation
-    interaction: { hover: true, zoomView: true, dragView: true },
+    physics: { enabled: false },   // positions come from computeGraphLayout, not simulation
+    interaction: { hover: true, zoomView: true, dragView: true, multiselect: true },
     edges: {
       smooth: { type: "cubicBezier", forceDirection: "vertical", roundness: 0.4 },
     },
@@ -645,6 +753,7 @@ function renderGraph(people, rels, topmost, branch) {
   if (network) network.destroy();
   network = new vis.Network(container, data, options);
 }
+
 
 function escapeHtml(str) {
   return String(str)
