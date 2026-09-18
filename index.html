@@ -213,7 +213,7 @@
     color: var(--ink-soft);
   }
   .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
-  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid var(--ink-soft); }
 
   .candidates {
     display: none;
@@ -308,11 +308,8 @@
     <div class="legend">
       <span><i class="swatch" style="background:#2b4c7d"></i> Male (bottom half)</span>
       <span><i class="swatch" style="background:#8e2f56"></i> Female (bottom half)</span>
-      <span><i class="swatch" style="background:var(--accent)"></i> Gender/branch unknown</span>
-      <span><i class="swatch" style="background:var(--ink-soft)"></i> Founding Father</span>
-      <span><i class="swatch" style="background:var(--spouse)"></i> Spouse</span>
-      <span><i class="swatch" style="background:var(--sibling)"></i> Sibling</span>
-      <span><i class="swatch" style="background:var(--ink-soft)"></i> Parent / Child</span>
+      <span><i class="swatch" style="background:#000000"></i> Gender/branch unknown</span>
+      <span><i class="swatch" style="background:#ffffff"></i> Founding Father</span>
     </div>
     <div class="legend" id="branchLegend"></div>
   </div>
@@ -605,7 +602,7 @@ function genderColor(gender) {
   const g = (gender || "").trim().toUpperCase();
   if (g === "M") return "#2b4c7d";   // blue
   if (g === "F") return "#8e2f56";   // dark pink
-  return getCss("--accent");          // gender unknown
+  return "#000000";                   // gender unknown -> black
 }
 
 // The 4 known branches get specific, requested colors, keyed by branch NAME
@@ -624,15 +621,15 @@ const KNOWN_BRANCH_COLORS = {
 
 // Fallback palette for any branch not in the known list above (e.g. the root
 // "CHALAKUZHY" entry, though that never actually gets a box/color in
-// practice since the founder always renders solid ink-soft regardless of
-// branch). Assigned by a stable string hash so a given branch is always the
-// same fallback color across renders.
+// practice since the founder always renders as a solid white circle
+// regardless of branch). Assigned by a stable string hash so a given branch
+// is always the same fallback color across renders.
 const BRANCH_COLOR_FALLBACK_PALETTE = [
   "#2f6e4f", "#a5672f", "#5b3e8a", "#1f7a8c",
   "#8a3f5b", "#4f5b8a", "#6b7a3f", "#7a3f6b",
 ];
 function branchColor(branchName) {
-  if (!branchName) return getCss("--accent"); // no branch on record
+  if (!branchName) return "#000000"; // no branch on record -> black
   const key = branchName.trim().toUpperCase();
   if (KNOWN_BRANCH_COLORS[key]) return KNOWN_BRANCH_COLORS[key];
   let hash = 0;
@@ -656,12 +653,15 @@ function contrastTextColor(hexColor) {
 }
 
 // Custom vis-network node shapes (shape: "custom" + ctxRenderer), since the
-// built-in shapes can't render a half-and-half circle. Both return a
-// drawNode() callback plus nodeDimensions so vis-network sizes/anchors edges
-// correctly. Label rendering is handled separately by vis-network itself
-// (same as any other shape) — these only draw the circle body.
+// built-in shapes can't render a half-and-half circle. IMPORTANT: unlike
+// built-in shapes, a "custom" shape does NOT get its label drawn
+// automatically by vis-network — this was tried and reverted upstream (the
+// library's own maintainers concluded a custom shape must draw its own
+// label). So each renderer explicitly returns drawExternalLabel(), which
+// vis-network calls in a separate pass positioned outside the node body —
+// this is what was missing and caused names not to appear at all.
 function makeSplitCircleRenderer(topColor, bottomColor, borderColor, radius) {
-  return function ({ ctx, x, y }) {
+  return function ({ ctx, x, y, label }) {
     return {
       drawNode: function () {
         ctx.save();
@@ -680,12 +680,22 @@ function makeSplitCircleRenderer(topColor, bottomColor, borderColor, radius) {
         ctx.stroke();
         ctx.restore();
       },
+      drawExternalLabel: function () {
+        if (!label) return;
+        ctx.save();
+        ctx.font = "13px Georgia, serif";
+        ctx.fillStyle = getCss("--ink");
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(label, x, y + radius + 4);
+        ctx.restore();
+      },
       nodeDimensions: { width: radius * 2, height: radius * 2 },
     };
   };
 }
 function makeSolidCircleRenderer(fillColor, borderColor, radius) {
-  return function ({ ctx, x, y }) {
+  return function ({ ctx, x, y, label }) {
     return {
       drawNode: function () {
         ctx.save();
@@ -697,6 +707,16 @@ function makeSolidCircleRenderer(fillColor, borderColor, radius) {
         ctx.lineWidth = 1.5;
         ctx.strokeStyle = borderColor;
         ctx.stroke();
+        ctx.restore();
+      },
+      drawExternalLabel: function () {
+        if (!label) return;
+        ctx.save();
+        ctx.font = "13px Georgia, serif";
+        ctx.fillStyle = getCss("--ink");
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(label, x, y + radius + 4);
         ctx.restore();
       },
       nodeDimensions: { width: radius * 2, height: radius * 2 },
@@ -806,7 +826,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
 
     const isFounder = founderGin && p.gin === founderGin;
     const ctxRenderer = isFounder
-      ? makeSolidCircleRenderer(getCss("--ink-soft"), getCss("--ink"), NODE_RADIUS)
+      ? makeSolidCircleRenderer("#ffffff", getCss("--ink"), NODE_RADIUS)
       : makeSplitCircleRenderer(branchColor(p.branch_name), genderColor(p.gender), getCss("--ink"), NODE_RADIUS);
 
     nodes.push({
