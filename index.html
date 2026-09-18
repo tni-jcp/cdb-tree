@@ -503,12 +503,12 @@ async function attemptSearch() {
       people, rels, topmost, branch,
       root_chain_people, root_chain_rels,
       founder_gin, founder_children,
-      branches_spanned,
+      all_branches,
     } = data;
 
     renderChain(people, rels);
     renderTopmost(topmost, branch);
-    renderBranchNote(branches_spanned);
+    renderBranchNote(all_branches);
     lastGraphArgs = {
       people, rels, topmost, branch,
       rootChainPeople: root_chain_people, rootChainRels: root_chain_rels,
@@ -568,7 +568,7 @@ function renderChain(people, rels) {
 function renderTopmost(topmost, branch) {
   const name = topmost ? (topmost.name || topmost.gin) : "Unknown";
   const branchName = branch ? branch.branch_name : "no branch on record";
-  topmostText.innerHTML = `Common ancestor: <strong>${escapeHtml(name)}</strong> — branch: <strong>${escapeHtml(branchName)}</strong>`;
+  topmostText.innerHTML = `Common ancestor: <strong style="color:var(--ink-soft)">${escapeHtml(name)}</strong> — branch: <strong>${escapeHtml(branchName)}</strong>`;
 }
 
 // Joins a list of branch names into readable prose: "A", "A and B", or
@@ -580,18 +580,24 @@ function joinNames(names) {
   return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
-// Only shown when a relationship's full lineage (main path + founder climb)
-// touches more than one branch — e.g. two people connected only via their
-// shared founder, in different branches of the family.
-function renderBranchNote(branchesSpanned) {
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+function numberWord(n) {
+  return NUMBER_WORDS[n] || String(n);
+}
+
+// General "the family has N branches" note — shown whenever the founder was
+// reached (all_branches lists every real branch the family has, independent
+// of which ones this specific query's two people happen to touch), not just
+// when this particular search happens to span more than one.
+function renderBranchNote(allBranches) {
   const el = document.getElementById("branchNote");
-  const names = (branchesSpanned || []).map((b) => b.branch_name).filter(Boolean);
-  if (names.length <= 1) {
+  const names = (allBranches || []).map((b) => b.branch_name).filter(Boolean);
+  if (names.length === 0) {
     el.textContent = "";
     el.classList.remove("show");
     return;
   }
-  el.textContent = `This connects the ${joinNames(names)} branches, via the family founder.`;
+  el.textContent = `This connects the Chalakuzhy Family members across its ${numberWord(names.length)} branches - ${joinNames(names)}.`;
   el.classList.add("show");
 }
 
@@ -602,24 +608,51 @@ function genderColor(gender) {
   return getCss("--accent");          // gender unknown
 }
 
-// A small fixed palette, assigned to a branch_id by a stable string hash — so
-// the same branch always gets the same color on every render (this session
-// and future ones), without needing to hardcode the family's actual branch
-// codes (which weren't fully confirmed against real book data — see the
-// Data Load Template's notes). Collisions are possible if there are ever more
-// distinct branches than palette entries, but with 8 slots against the
-// family's ~4 branches that's unlikely in practice.
-const BRANCH_COLOR_PALETTE = [
+// The 4 known branches get specific, requested colors, keyed by branch NAME
+// (normalized to uppercase/trimmed) rather than branch_id — the exact branch
+// codes weren't fully confirmed against real book data (see the Data Load
+// Template's notes), but the NAMES are known from the real sample data.
+// PADINJAARE-VEETTIL is included as an alternate spelling safeguard in case
+// the database has the standard spelling rather than "PDINJAARE-VEETTIL".
+const KNOWN_BRANCH_COLORS = {
+  "KIZHAKKE-VEETTIL": "#2e7d32",     // green
+  "PYNUMMOOTTIL": "#e65100",          // orange
+  "PULIMOOTTIL": "#6a1b9a",           // purple
+  "PDINJAARE-VEETTIL": "#f9a825",     // yellow
+  "PADINJAARE-VEETTIL": "#f9a825",    // yellow (alternate spelling)
+};
+
+// Fallback palette for any branch not in the known list above (e.g. the root
+// "CHALAKUZHY" entry, though that never actually gets a box/color in
+// practice since the founder always renders solid ink-soft regardless of
+// branch). Assigned by a stable string hash so a given branch is always the
+// same fallback color across renders.
+const BRANCH_COLOR_FALLBACK_PALETTE = [
   "#2f6e4f", "#a5672f", "#5b3e8a", "#1f7a8c",
   "#8a3f5b", "#4f5b8a", "#6b7a3f", "#7a3f6b",
 ];
-function branchColor(branchId) {
-  if (!branchId) return getCss("--accent"); // no branch on record
+function branchColor(branchName) {
+  if (!branchName) return getCss("--accent"); // no branch on record
+  const key = branchName.trim().toUpperCase();
+  if (KNOWN_BRANCH_COLORS[key]) return KNOWN_BRANCH_COLORS[key];
   let hash = 0;
-  for (let i = 0; i < branchId.length; i++) {
-    hash = (hash * 31 + branchId.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
   }
-  return BRANCH_COLOR_PALETTE[hash % BRANCH_COLOR_PALETTE.length];
+  return BRANCH_COLOR_FALLBACK_PALETTE[hash % BRANCH_COLOR_FALLBACK_PALETTE.length];
+}
+
+// Picks readable label text (dark ink vs white) against a given background
+// color, so a light color like the yellow branch doesn't end up with
+// low-contrast white-on-yellow text.
+function contrastTextColor(hexColor) {
+  const c = hexColor.replace("#", "");
+  if (c.length !== 6) return "#ffffff";
+  const r = parseInt(c.substring(0, 2), 16);
+  const g = parseInt(c.substring(2, 4), 16);
+  const b = parseInt(c.substring(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? "#2b241a" : "#ffffff";
 }
 
 // Custom vis-network node shapes (shape: "custom" + ctxRenderer), since the
@@ -774,7 +807,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
     const isFounder = founderGin && p.gin === founderGin;
     const ctxRenderer = isFounder
       ? makeSolidCircleRenderer(getCss("--ink-soft"), getCss("--ink"), NODE_RADIUS)
-      : makeSplitCircleRenderer(branchColor(p.branch_code), genderColor(p.gender), getCss("--ink"), NODE_RADIUS);
+      : makeSplitCircleRenderer(branchColor(p.branch_name), genderColor(p.gender), getCss("--ink"), NODE_RADIUS);
 
     nodes.push({
       id,
@@ -819,7 +852,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
     const branchId = "branch_" + branchInfo.elementId;
     if (addedBranchIds.has(branchId)) return; // two children sharing a branch code, just in case
     addedBranchIds.add(branchId);
-    const color = branchColor(branchInfo.branch_id);
+    const color = branchColor(branchInfo.branch_name);
     branchesUsed.push({ name: branchInfo.branch_name, color });
     nodes.push({
       id: branchId,
@@ -827,13 +860,12 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
       level,
       shape: "box",
       color: { background: color, border: getCss("--ink") },
-      font: { color: "#fff", face: "Georgia" },
+      font: { color: contrastTextColor(color), face: "Georgia" },
     });
     edges.push({
       from: personElementId,
       to: branchId,
       label: "BELONGS TO",
-      dashes: true,
       color: { color },
       font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
     });
