@@ -280,12 +280,12 @@
 
   <form class="search" id="searchForm">
     <div class="field" id="field1">
-      <label for="name1">Family Member 1</label>
+      <label for="name1">Person 1</label>
       <input type="text" id="name1" placeholder="e.g. Mammen (typos OK)" required autocomplete="off">
       <div class="candidates" id="candidates1"></div>
     </div>
     <div class="field" id="field2">
-      <label for="name2">Family Member 2</label>
+      <label for="name2">Person 2</label>
       <input type="text" id="name2" placeholder="e.g. Cherian (typos OK)" required autocomplete="off">
       <div class="candidates" id="candidates2"></div>
     </div>
@@ -536,6 +536,17 @@ document.getElementById("resetLayoutBtn").addEventListener("click", () => {
   if (lastGraphArgs) renderGraph(lastGraphArgs);
 });
 
+// Shared name formatting: "Name (Nickname)" when a nickname (MBR_NICKNAME) is
+// on record, otherwise just the name (or gin, if even the name is missing —
+// e.g. a data gap on a placeholder member). Used everywhere a member's name
+// is displayed, so nicknames show up consistently across the text summary,
+// the graph, and anywhere else names appear.
+function displayName(person) {
+  if (!person) return "Unknown";
+  const base = person.name || person.gin;
+  return person.nickname ? `${base} (${person.nickname})` : base;
+}
+
 // Renders the "A — PARENT OF → B" narrative line. Direction is read from each
 // relationship's own startNodeElementId — NOT assumed from list order — because
 // shortestPath() can traverse a PARENT_OF edge in either direction (e.g. walking
@@ -543,7 +554,7 @@ document.getElementById("resetLayoutBtn").addEventListener("click", () => {
 function renderChain(people, rels) {
   let html = "";
   people.forEach((p, i) => {
-    html += `<strong>${escapeHtml(p.name || p.gin)}</strong>`;
+    html += `<strong>${escapeHtml(displayName(p))}</strong>`;
     if (i < rels.length) {
       const r = rels[i];
       const label = (r.display_type || r.type).replace(/_/g, " ");
@@ -563,10 +574,11 @@ function renderChain(people, rels) {
 }
 
 function renderTopmost(topmost, branch) {
-  const name = topmost ? (topmost.name || topmost.gin) : "Unknown";
+  const name = topmost ? displayName(topmost) : "Unknown";
   const branchName = branch ? branch.branch_name : "no branch on record";
   topmostText.innerHTML = `Common ancestor: <strong style="color:var(--ink-soft)">${escapeHtml(name)}</strong> — branch: <strong>${escapeHtml(branchName)}</strong>`;
 }
+
 
 // Joins a list of branch names into readable prose: "A", "A and B", or
 // "A, B, and C".
@@ -831,7 +843,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
 
     nodes.push({
       id,
-      label: p.name || p.gin,
+      label: displayName(p),
       level: levels[id],
       shape: "custom",
       ctxRenderer,
