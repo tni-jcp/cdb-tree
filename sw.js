@@ -1,14 +1,16 @@
-// sw.js — Chalakuzhy Relationship Finder
-// Caches the static app shell (HTML/CSS/JS/icons + the two CDN libraries) so the
-// app installs cleanly and opens instantly on repeat visits. Deliberately does
-// NOT cache anything under /api/ — relationship data must always come from the
-// live backend, never a stale cached response.
+// sw.js — Chalakuzhy Genealogy App (Relationship Finder + Lookup Family Near Me)
+// Caches the static app shell (HTML/CSS/JS/icons + the CDN library used by
+// Relationship Finder's graph view) so the app installs cleanly and opens
+// instantly on repeat visits. Deliberately does NOT cache anything under
+// /api/ — relationship and location data must always come from the live
+// backend, never a stale cached response.
 
-const CACHE_NAME = "chalakuzhy-shell-v1";
+const CACHE_NAME = "chalakuzhy-shell-v2";
 
 const SHELL_ASSETS = [
   "./",
   "./index.html",
+  "./family_near_me.html",
   "./manifest.webmanifest",
   "./icon-192.png",
   "./icon-512.png",

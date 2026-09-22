@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chalakuzhy Genealogy — Lookup Family Near Me</title>
+
+<!-- PWA install support — shares the same manifest/service worker as
+     Relationship Finder, since both are pages of one installed app. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#7a3b2e">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chalakuzhy Tree">
+
+<style>
+  :root {
+    --paper: #f2ead9;
+    --paper-dark: #e6d9bd;
+    --ink: #2b241a;
+    --ink-soft: #6b5d47;
+    --line: #c9b98e;
+    --accent: #7a3b2e;
+    --accent-soft: #a85c3f;
+    --error: #a3352b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(107,93,71,0.05) 28px);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    min-height: 100vh;
+  }
+  header {
+    padding: 1.6rem 2rem 1rem;
+    border-bottom: 3px double var(--line);
+    text-align: center;
+    position: relative;
+  }
+  header .eyebrow {
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    font-family: Georgia, serif;
+  }
+  header h1 {
+    margin: 0.3rem 0 0.2rem;
+    font-size: 2rem;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+  }
+  header p.sub {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    font-style: italic;
+  }
+  .nav-btn {
+    display: inline-block;
+    margin-top: 0.9rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    padding: 0.45rem 1rem;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent-soft);
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.12s ease;
+  }
+  .nav-btn:hover { background: rgba(122,59,46,0.08); }
+
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem 2rem 3rem;
+  }
+  .config-note {
+    background: rgba(122,59,46,0.08);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0.7rem 1rem;
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    margin-bottom: 1.4rem;
+  }
+
+  form.search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: end;
+    background: rgba(255,255,255,0.35);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1.2rem;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 260px; }
+  .field label {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .field input {
+    font-family: inherit;
+    font-size: 1rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #fffdf7;
+    color: var(--ink);
+  }
+  .field input:focus { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+  .field input:disabled {
+    opacity: 0.45;
+    background: rgba(0,0,0,0.04);
+    cursor: not-allowed;
+  }
+  .field.resolved input { border-color: var(--accent-soft); background: #fbf4e6; }
+  .or-divider {
+    align-self: center;
+    color: var(--ink-soft);
+    font-style: italic;
+    font-size: 0.85rem;
+    padding: 0 0.2rem;
+  }
+  button.go {
+    font-family: inherit;
+    font-size: 0.95rem;
+    letter-spacing: 0.04em;
+    padding: 0.6rem 1.4rem;
+    background: var(--accent);
+    color: var(--paper);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.go:hover { background: var(--accent-soft); }
+  button.go:disabled { background: var(--ink-soft); cursor: progress; }
+
+  .candidates {
+    display: none;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+    padding: 0.6rem;
+    background: rgba(122,59,46,0.06);
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+    width: 100%;
+  }
+  .candidates.show { display: flex; }
+  .candidates .hint {
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.1rem;
+  }
+  .candidate-btn {
+    text-align: left;
+    font-family: inherit;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #fffdf7;
+    color: var(--ink);
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .candidate-btn:hover { background: rgba(122,59,46,0.1); }
+  .candidate-btn.selected { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+  .candidate-btn .meta {
+    font-size: 0.72rem;
+    opacity: 0.75;
+    display: block;
+    margin-top: 0.1rem;
+  }
+
+  #status { margin-top: 1rem; font-size: 0.9rem; min-height: 1.4em; }
+  #status.error { color: var(--error); }
+  #status.ok { color: var(--ink-soft); }
+
+  #result-panel { margin-top: 1.5rem; display: none; }
+  .summary-card {
+    background: rgba(255,255,255,0.5);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: 3px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 1.2rem;
+    font-size: 1rem;
+  }
+  .summary-card strong { color: var(--ink-soft); }
+
+  .branch-group { margin-bottom: 1.4rem; }
+  .branch-group h3 {
+    font-size: 0.95rem;
+    letter-spacing: 0.03em;
+    margin: 0 0 0.5rem;
+    padding-left: 0.6rem;
+    border-left: 5px solid var(--group-color, var(--accent));
+    color: var(--ink);
+  }
+  .member-list { display: flex; flex-direction: column; gap: 0.4rem; }
+  .member-row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    background: rgba(255,255,255,0.5);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.55rem 0.8rem;
+  }
+  .member-badge {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    border: 1.5px solid var(--ink);
+    display: flex;
+    flex-direction: column;
+  }
+  .member-badge .half { flex: 1 1 50%; }
+  .member-info { display: flex; flex-direction: column; }
+  .member-info .name { font-size: 1rem; color: var(--ink); }
+  .member-info .meta { font-size: 0.78rem; color: var(--ink-soft); }
+
+  .legend {
+    display: flex;
+    gap: 1.4rem;
+    flex-wrap: wrap;
+    margin-top: 1.2rem;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid var(--ink-soft); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Chalakuzhy Family Register</div>
+  <h1>Lookup Family Near Me</h1>
+  <p class="sub">Find family members who share a location — by name, place, or country</p>
+  <a class="nav-btn" href="index.html">Relationship Finder</a>
+</header>
+
+<main>
+  <div class="config-note">
+    Enter EITHER a family member's name OR a place — the other field disables automatically once
+    you start typing. Both are typo-tolerant (fuzzy match) — if a name or place matches more than
+    one record, you'll be asked to pick which one you meant.
+  </div>
+
+  <form class="search" id="searchForm">
+    <div class="field" id="nameField">
+      <label for="nameInput">Family Member Name</label>
+      <input type="text" id="nameInput" placeholder="e.g. Mammen (typos OK)" autocomplete="off">
+      <div class="candidates" id="nameCandidates"></div>
+    </div>
+    <div class="or-divider">or</div>
+    <div class="field" id="placeField">
+      <label for="placeInput">Place, City, or Country Name</label>
+      <input type="text" id="placeInput" placeholder="e.g. Kottayam, or India (typos OK)" autocomplete="off">
+      <div class="candidates" id="placeCandidates"></div>
+    </div>
+    <button type="submit" class="go" id="goBtn">Find Family Nearby</button>
+  </form>
+
+  <div id="status"></div>
+
+  <div id="result-panel">
+    <div class="summary-card" id="summaryCard"></div>
+    <div id="resultsContainer"></div>
+    <div class="legend" id="genderLegend">
+      <span><i class="swatch" style="background:#2b4c7d"></i> Male (bottom half)</span>
+      <span><i class="swatch" style="background:#8e2f56"></i> Female (bottom half)</span>
+      <span><i class="swatch" style="background:#000000"></i> Gender/branch unknown</span>
+    </div>
+    <div class="legend" id="branchLegend"></div>
+  </div>
+</main>
+
+<script>
+// ---------------------------------------------------------------------------
+// API SETTINGS — point this at your deployed backend (same one Relationship
+// Finder uses; see app.py / DEPLOYMENT_README.md)
+// ---------------------------------------------------------------------------
+const API_BASE_URL = "https://CHANGE-ME.example.com";
+// ---------------------------------------------------------------------------
+
+const nameInput = document.getElementById("nameInput");
+const placeInput = document.getElementById("placeInput");
+const nameField = document.getElementById("nameField");
+const placeField = document.getElementById("placeField");
+const nameCandidates = document.getElementById("nameCandidates");
+const placeCandidates = document.getElementById("placeCandidates");
+const goBtn = document.getElementById("goBtn");
+const statusEl = document.getElementById("status");
+const resultPanel = document.getElementById("result-panel");
+const summaryCard = document.getElementById("summaryCard");
+const resultsContainer = document.getElementById("resultsContainer");
+const branchLegendEl = document.getElementById("branchLegend");
+
+// --- Mutual exclusion: typing in one field disables the other ---
+function updateFieldExclusion() {
+  const hasName = nameInput.value.trim().length > 0;
+  const hasPlace = placeInput.value.trim().length > 0;
+  placeInput.disabled = hasName;
+  nameInput.disabled = hasPlace;
+}
+nameInput.addEventListener("input", () => {
+  clearCandidates("name");
+  updateFieldExclusion();
+});
+placeInput.addEventListener("input", () => {
+  clearCandidates("place");
+  updateFieldExclusion();
+});
+
+function clearCandidates(which) {
+  const el = which === "name" ? nameCandidates : placeCandidates;
+  const field = which === "name" ? nameField : placeField;
+  el.classList.remove("show");
+  el.innerHTML = "";
+  field.classList.remove("resolved");
+}
+
+function showError(message) {
+  statusEl.className = "error";
+  statusEl.textContent = message;
+}
+
+function apiUrl(path, params) {
+  const base = API_BASE_URL && API_BASE_URL.trim() ? API_BASE_URL : window.location.origin;
+  const url = new URL(path, base);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  return url.toString();
+}
+
+async function apiGet(path, params) {
+  const resp = await fetch(apiUrl(path, params));
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try {
+      const body = await resp.json();
+      detail = body.detail || detail;
+    } catch (_) {
+      // not JSON — keep statusText
+    }
+    throw new Error(`${resp.status} ${detail}`);
+  }
+  return resp.json();
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function displayName(person) {
+  if (!person) return "Unknown";
+  const base = person.name || person.gin;
+  return person.nickname ? `${base} (${person.nickname})` : base;
+}
+
+// --- Same color scheme as Relationship Finder ---
+function genderColor(gender) {
+  const g = (gender || "").trim().toUpperCase();
+  if (g === "M") return "#2b4c7d";
+  if (g === "F") return "#8e2f56";
+  return "#000000";
+}
+const KNOWN_BRANCH_COLORS = {
+  "KIZHAKKE-VEETTIL": "#2e7d32",
+  "PYNUMMOOTTIL": "#e65100",
+  "PULIMOOTTIL": "#6a1b9a",
+  "PDINJAARE-VEETTIL": "#f9a825",
+  "PADINJAARE-VEETTIL": "#f9a825",
+};
+const BRANCH_COLOR_FALLBACK_PALETTE = [
+  "#2f6e4f", "#a5672f", "#5b3e8a", "#1f7a8c",
+  "#8a3f5b", "#4f5b8a", "#6b7a3f", "#7a3f6b",
+];
+function branchColor(branchName) {
+  if (!branchName) return "#000000";
+  const key = branchName.trim().toUpperCase();
+  if (KNOWN_BRANCH_COLORS[key]) return KNOWN_BRANCH_COLORS[key];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return BRANCH_COLOR_FALLBACK_PALETTE[hash % BRANCH_COLOR_FALLBACK_PALETTE.length];
+}
+
+function joinNames(names) {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+// --- Name resolution (reuses the same /api/search person endpoint Relationship Finder uses) ---
+async function resolveNameCandidates(text) {
+  const data = await apiGet("/api/search", { q: text });
+  return data.candidates || [];
+}
+
+function renderNameCandidates(text, candidates) {
+  nameCandidates.innerHTML = "";
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = `Multiple matches for "${text}" — choose one:`;
+  nameCandidates.appendChild(hint);
+
+  candidates.forEach((node) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "candidate-btn";
+    const name = displayName(node);
+    btn.innerHTML = `${escapeHtml(name)}` +
+      `<span class="meta">${escapeHtml(node.gin)} · ${escapeHtml(node.branch_name || "no branch on record")} · gen ${escapeHtml(node.generation_code || "?")}</span>`;
+    btn.addEventListener("click", async () => {
+      [...nameCandidates.querySelectorAll(".candidate-btn")].forEach((b) => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      nameField.classList.add("resolved");
+      await runSearch({ type: "member", gin: node.gin, label: name });
+    });
+    nameCandidates.appendChild(btn);
+  });
+  nameCandidates.classList.add("show");
+}
+
+function renderPlaceCandidates(text, candidates) {
+  placeCandidates.innerHTML = "";
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = `Multiple distinct locations match "${text}" — choose one:`;
+  placeCandidates.appendChild(hint);
+
+  candidates.forEach((c) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "candidate-btn";
+    const plural = c.member_count === 1 ? "member" : "members";
+    btn.innerHTML = `${escapeHtml(c.location)}` +
+      `<span class="meta">${c.member_count} ${plural} recorded here</span>`;
+    btn.addEventListener("click", async () => {
+      [...placeCandidates.querySelectorAll(".candidate-btn")].forEach((b) => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      placeField.classList.add("resolved");
+      await runSearch({ type: "exact_location", location: c.location });
+    });
+    placeCandidates.appendChild(btn);
+  });
+  placeCandidates.classList.add("show");
+}
+
+// --- Main search orchestration ---
+async function attemptSearch() {
+  const nameText = nameInput.value.trim();
+  const placeText = placeInput.value.trim();
+
+  if (!nameText && !placeText) {
+    showError("Enter a family member's name, or a place/city/country name, to search.");
+    return;
+  }
+
+  goBtn.disabled = true;
+  statusEl.className = "";
+  statusEl.textContent = "Searching...";
+  resultPanel.style.display = "none";
+  clearCandidates("name");
+  clearCandidates("place");
+
+  try {
+    if (nameText) {
+      const candidates = await resolveNameCandidates(nameText);
+      if (candidates.length === 0) {
+        showError(`No family member found matching "${nameText}".`);
+        return;
+      }
+      if (candidates.length === 1) {
+        nameField.classList.add("resolved");
+        await runSearch({ type: "member", gin: candidates[0].gin, label: displayName(candidates[0]) });
+        return;
+      }
+      renderNameCandidates(nameText, candidates);
+      statusEl.className = "ok";
+      statusEl.textContent = "Multiple matches found — pick from the list above to continue.";
+    } else {
+      const data = await apiGet("/api/nearby-search-location", { q: placeText });
+      if (data.mode === "none") {
+        showError(`No location found matching "${placeText}".`);
+        return;
+      }
+      if (data.mode === "candidates") {
+        renderPlaceCandidates(placeText, data.candidates);
+        statusEl.className = "ok";
+        statusEl.textContent = "Multiple matching locations found — pick from the list above to continue.";
+        return;
+      }
+      // mode === "results" (single match, or a country match)
+      placeField.classList.add("resolved");
+      renderResults(data);
+      statusEl.className = "ok";
+      statusEl.textContent = "";
+    }
+  } catch (err) {
+    showError("Connection or query error: " + err.message);
+    console.error(err);
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+
+// Runs the actual "find nearby" call once a specific member or exact location
+// has been resolved (either directly, or via a candidate picker selection).
+async function runSearch(resolved) {
+  goBtn.disabled = true;
+  statusEl.className = "";
+  statusEl.textContent = "Searching...";
+  try {
+    let data;
+    if (resolved.type === "member") {
+      data = await apiGet("/api/nearby-by-member", { gin: resolved.gin });
+      if (data.mode === "none") {
+        showError(
+          data.reason === "no_location_on_record"
+            ? `${resolved.label} has no location on record, so nearby family can't be found.`
+            : `Could not resolve "${resolved.label}".`
+        );
+        return;
+      }
+    } else {
+      data = await apiGet("/api/nearby-by-exact-location", { location: resolved.location });
+    }
+    renderResults(data);
+    statusEl.className = "ok";
+    statusEl.textContent = "";
+  } catch (err) {
+    showError("Connection or query error: " + err.message);
+    console.error(err);
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+
+document.getElementById("searchForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  attemptSearch();
+});
+
+// --- Rendering results ---
+function renderResults(data) {
+  const members = data.members || [];
+
+  let summaryHtml = data.anchor_name
+    ? `Family near <strong>${escapeHtml(data.anchor_name)}</strong> — location: <strong>${escapeHtml(data.resolved_location_label)}</strong>`
+    : `Location: <strong>${escapeHtml(data.resolved_location_label)}</strong>`;
+  summaryHtml += `<br>${members.length} member(s) found.`;
+  summaryCard.innerHTML = summaryHtml;
+
+  resultsContainer.innerHTML = "";
+
+  if (members.length === 0) {
+    const empty = document.createElement("p");
+    empty.style.color = "var(--ink-soft)";
+    empty.style.fontStyle = "italic";
+    empty.textContent = "No other family members are recorded at this location.";
+    resultsContainer.appendChild(empty);
+    branchLegendEl.innerHTML = "";
+    resultPanel.style.display = "block";
+    return;
+  }
+
+  // Group by branch, "No branch on record" bucket last
+  const groups = {};
+  members.forEach((m) => {
+    const key = m.branch_name || "No branch on record";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(m);
+  });
+  const groupNames = Object.keys(groups).sort((a, b) => {
+    if (a === "No branch on record") return 1;
+    if (b === "No branch on record") return -1;
+    return a.localeCompare(b);
+  });
+
+  const branchesUsed = [];
+
+  groupNames.forEach((groupName) => {
+    const groupMembers = groups[groupName].slice().sort((a, b) => {
+      const genA = (a.generation_code || "").toString();
+      const genB = (b.generation_code || "").toString();
+      if (genA !== genB) return genA.localeCompare(genB);
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+    const color = branchColor(groupName === "No branch on record" ? null : groupName);
+    if (groupName !== "No branch on record") branchesUsed.push({ name: groupName, color });
+
+    const section = document.createElement("div");
+    section.className = "branch-group";
+    section.style.setProperty("--group-color", color);
+
+    const heading = document.createElement("h3");
+    heading.textContent = `${groupName} (${groupMembers.length})`;
+    section.appendChild(heading);
+
+    const list = document.createElement("div");
+    list.className = "member-list";
+
+    groupMembers.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "member-row";
+
+      const badge = document.createElement("span");
+      badge.className = "member-badge";
+      const topHalf = document.createElement("span");
+      topHalf.className = "half";
+      topHalf.style.background = color;
+      const bottomHalf = document.createElement("span");
+      bottomHalf.className = "half";
+      bottomHalf.style.background = genderColor(m.gender);
+      badge.appendChild(topHalf);
+      badge.appendChild(bottomHalf);
+
+      const info = document.createElement("div");
+      info.className = "member-info";
+      const nameEl = document.createElement("div");
+      nameEl.className = "name";
+      nameEl.textContent = displayName(m);
+      const metaEl = document.createElement("div");
+      metaEl.className = "meta";
+      metaEl.textContent = `Gen ${m.generation_code || "?"} · ${m.location || "location on record"}`;
+      info.appendChild(nameEl);
+      info.appendChild(metaEl);
+
+      row.appendChild(badge);
+      row.appendChild(info);
+      list.appendChild(row);
+    });
+
+    section.appendChild(list);
+    resultsContainer.appendChild(section);
+  });
+
+  renderBranchLegend(branchesUsed);
+  resultPanel.style.display = "block";
+}
+
+function renderBranchLegend(branchesUsed) {
+  branchLegendEl.innerHTML = "";
+  if (!branchesUsed || branchesUsed.length === 0) return;
+
+  const label = document.createElement("span");
+  label.textContent = "Branch (top half of badge):";
+  label.style.fontStyle = "italic";
+  branchLegendEl.appendChild(label);
+
+  const seen = new Set();
+  branchesUsed.forEach(({ name, color }) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const span = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.style.background = color;
+    span.appendChild(swatch);
+    span.appendChild(document.createTextNode(" " + name));
+    branchLegendEl.appendChild(span);
+  });
+}
+
+// --- PWA: register the service worker for install support + offline shell ---
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => {
+      console.warn("Service worker registration failed:", err);
+    });
+  });
+}
+</script>
+
+</body>
+</html>
