@@ -231,6 +231,56 @@
   .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
   .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid var(--ink-soft); }
 
+  /* Member details panel — deliberately placed BELOW the graph (not overlaid
+     on it) so drilled-down attribute text never overlaps the tree. */
+  #memberDetailsPanel {
+    display: none;
+    margin-top: 1.6rem;
+    padding-top: 1.2rem;
+    border-top: 3px double var(--line);
+  }
+  #memberDetailsPanel.show { display: block; }
+  .detail-panel-heading {
+    margin: 0 0 0.3rem;
+    font-size: 1.05rem;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+  }
+  .detail-panel-hint {
+    margin: 0 0 0.9rem;
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--ink-soft);
+  }
+  .detail-card {
+    background: rgba(255,255,255,0.5);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: 3px;
+    padding: 0.8rem 1.1rem;
+    margin-bottom: 0.8rem;
+  }
+  .detail-card h4 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+    font-weight: 400;
+    color: var(--ink);
+  }
+  .detail-card ul {
+    margin: 0;
+    padding-left: 1.3rem;
+    text-align: left;
+    list-style-type: disc;
+  }
+  .detail-card li {
+    font-size: 0.88rem;
+    color: var(--ink-soft);
+    margin-bottom: 0.3rem;
+    line-height: 1.4;
+  }
+  .detail-card li:last-child { margin-bottom: 0; }
+
   .candidates {
     display: none;
     flex-direction: column;
@@ -329,6 +379,11 @@
       <span><i class="swatch" style="background:#ffffff"></i> Founding Father</span>
     </div>
     <div class="legend" id="branchLegend"></div>
+    <div id="memberDetailsPanel">
+      <h3 class="detail-panel-heading">Member Details</h3>
+      <p class="detail-panel-hint">Double-click a node above to add their details here.</p>
+      <div id="memberDetailsCards"></div>
+    </div>
   </div>
 </main>
 
@@ -932,6 +987,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   personByElementId = {};
   expandedElementIds = new Set();
   liveEdgeKeys = new Set();
+  clearMemberDetailsPanel();
 
   allPeople.forEach((p) => {
     const id = p.elementId;
@@ -1032,27 +1088,40 @@ function computeRowRightEdges(nodesData) {
   return edges;
 }
 
-// Truncates a long MBR_OTHER_INFO value for the node label — wrapText still
-// wraps it to multiple lines, but a very long field could otherwise draw an
-// excessively tall label under one node.
-function truncateForLabel(text, maxChars) {
-  if (!text) return text;
-  return text.length > maxChars ? text.slice(0, maxChars - 3) + "..." : text;
+// Appends a bulleted, left-justified detail card for a double-clicked member
+// to the panel BELOW the graph — deliberately not drawn on the canvas at
+// all, so it can never overlap the tree. New entries are added to the top,
+// so the most recently expanded member is visible without scrolling past
+// earlier ones. other_info is already PII-redacted server-side (dates,
+// phone numbers, and address-like text are stripped before this ever
+// reaches the browser) — this only formats what the API already sent.
+function appendMemberDetailsPanel(person) {
+  const panel = document.getElementById("memberDetailsPanel");
+  const cardsContainer = document.getElementById("memberDetailsCards");
+
+  const card = document.createElement("div");
+  card.className = "detail-card";
+
+  const heading = document.createElement("h4");
+  heading.textContent = displayName(person);
+  card.appendChild(heading);
+
+  const ul = document.createElement("ul");
+  const locLi = document.createElement("li");
+  locLi.textContent = `Location: ${person.location || "Not Available"}`;
+  const otherLi = document.createElement("li");
+  otherLi.textContent = `Other Info: ${person.other_info || "Not Available"}`;
+  ul.appendChild(locLi);
+  ul.appendChild(otherLi);
+  card.appendChild(ul);
+
+  cardsContainer.insertBefore(card, cardsContainer.firstChild);
+  panel.classList.add("show");
 }
 
-function buildExpandedLabel(person) {
-  const nameLine = displayName(person);
-  const locLine = `Location: ${person.location || "Not Available"}`;
-  const otherLine = `Other Info: ${truncateForLabel(person.other_info, 160) || "Not Available"}`;
-  return `${nameLine}\n${locLine}\n${otherLine}`;
-}
-
-// Updates an already-shown node's own label to include its Location / Other
-// Info once the user has double-clicked it — everyone else keeps the plain
-// name-only label until they too are expanded.
-function updateNodeToExpandedLabel(elementId, person) {
-  liveNodes.update({ id: elementId, label: buildExpandedLabel(person) });
-  personByElementId[elementId] = { ...personByElementId[elementId], ...person };
+function clearMemberDetailsPanel() {
+  document.getElementById("memberDetailsCards").innerHTML = "";
+  document.getElementById("memberDetailsPanel").classList.remove("show");
 }
 
 // Places a newly-revealed spouse/child, OR reuses their existing node if
@@ -1128,7 +1197,8 @@ async function handleNodeDoubleClick(params) {
     const data = await apiGet("/api/member-expand", { gin: person.gin });
     if (!data.found) return;
 
-    updateNodeToExpandedLabel(clickedId, data.person);
+    personByElementId[clickedId] = { ...personByElementId[clickedId], ...data.person };
+    appendMemberDetailsPanel(data.person);
     addExpansionResults(clickedId, data.spouses || [], data.children || []);
   } catch (err) {
     console.error("Expand failed:", err);
