@@ -231,53 +231,61 @@
   .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
   .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid var(--ink-soft); }
 
-  /* Member details panel — deliberately placed BELOW the graph (not overlaid
-     on it) so drilled-down attribute text never overlaps the tree. */
-  #memberDetailsPanel {
-    display: none;
-    margin-top: 1.6rem;
-    padding-top: 1.2rem;
-    border-top: 3px double var(--line);
-  }
-  #memberDetailsPanel.show { display: block; }
-  .detail-panel-heading {
-    margin: 0 0 0.3rem;
-    font-size: 1.05rem;
-    font-weight: 400;
-    letter-spacing: 0.02em;
-    color: var(--ink);
-  }
-  .detail-panel-hint {
-    margin: 0 0 0.9rem;
-    font-size: 0.8rem;
-    font-style: italic;
-    color: var(--ink-soft);
+  /* Network wrapper establishes the positioning context for floating detail
+     cards, which are absolutely positioned near whichever node was
+     double-clicked — inside the main output window itself, not a separate
+     panel below it. overflow: visible so a card near the edge of the
+     network area isn't clipped. */
+  .network-wrapper { position: relative; overflow: visible; }
+  #networkOverlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none; /* clicks/drags pass through to the canvas underneath by default */
   }
   .detail-card {
-    background: rgba(255,255,255,0.5);
+    position: absolute;
+    pointer-events: auto; /* the card itself IS interactive (close button, text selection) */
+    width: 230px;
+    background: #fffdf7;
     border: 1px solid var(--line);
     border-left: 4px solid var(--accent);
     border-radius: 3px;
-    padding: 0.8rem 1.1rem;
-    margin-bottom: 0.8rem;
+    padding: 0.6rem 0.8rem;
+    box-shadow: 0 2px 8px rgba(43,36,26,0.18);
+    z-index: 5;
   }
+  .detail-card .close-btn {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.4rem;
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+  }
+  .detail-card .close-btn:hover { color: var(--error); }
   .detail-card h4 {
-    margin: 0 0 0.5rem;
-    font-size: 1rem;
+    margin: 0 1.1rem 0.4rem 0;
+    font-size: 0.92rem;
     font-weight: 400;
     color: var(--ink);
   }
   .detail-card ul {
     margin: 0;
-    padding-left: 1.3rem;
+    padding-left: 1.1rem;
     text-align: left;
     list-style-type: disc;
   }
   .detail-card li {
-    font-size: 0.88rem;
+    font-size: 0.8rem;
     color: var(--ink-soft);
-    margin-bottom: 0.3rem;
-    line-height: 1.4;
+    margin-bottom: 0.25rem;
+    line-height: 1.35;
+    word-wrap: break-word;
   }
   .detail-card li:last-child { margin-bottom: 0; }
 
@@ -368,10 +376,13 @@
       <div class="branch-note" id="branchNote"></div>
     </div>
     <div class="network-toolbar">
-      <span class="network-hint">Drag any node to rearrange the tree. Double-click a node to reveal their spouse, children, and details.</span>
+      <span class="network-hint">Drag any node to rearrange the tree. Double-click a node to reveal their spouse, children, and details nearby.</span>
       <button type="button" class="reset-btn" id="resetLayoutBtn">Reset arrangement</button>
     </div>
-    <div id="network"></div>
+    <div class="network-wrapper">
+      <div id="network"></div>
+      <div id="networkOverlay"></div>
+    </div>
     <div class="legend">
       <span><i class="swatch" style="background:#2b4c7d"></i> Male (bottom half)</span>
       <span><i class="swatch" style="background:#8e2f56"></i> Female (bottom half)</span>
@@ -379,11 +390,6 @@
       <span><i class="swatch" style="background:#ffffff"></i> Founding Father</span>
     </div>
     <div class="legend" id="branchLegend"></div>
-    <div id="memberDetailsPanel">
-      <h3 class="detail-panel-heading">Member Details</h3>
-      <p class="detail-panel-hint">Double-click a node above to add their details here.</p>
-      <div id="memberDetailsCards"></div>
-    </div>
   </div>
 </main>
 
@@ -987,7 +993,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   personByElementId = {};
   expandedElementIds = new Set();
   liveEdgeKeys = new Set();
-  clearMemberDetailsPanel();
+  clearAllDetailBoxes();
 
   allPeople.forEach((p) => {
     const id = p.elementId;
@@ -1072,6 +1078,7 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   if (network) network.destroy();
   network = new vis.Network(container, data, options);
   network.on("doubleClick", handleNodeDoubleClick);
+  network.on("afterDrawing", repositionAllDetailBoxes);
 }
 
 // Records the rightmost x currently occupied on each row (level), from a
@@ -1088,19 +1095,64 @@ function computeRowRightEdges(nodesData) {
   return edges;
 }
 
-// Appends a bulleted, left-justified detail card for a double-clicked member
-// to the panel BELOW the graph — deliberately not drawn on the canvas at
-// all, so it can never overlap the tree. New entries are added to the top,
-// so the most recently expanded member is visible without scrolling past
-// earlier ones. other_info is already PII-redacted server-side (dates,
-// phone numbers, and address-like text are stripped before this ever
-// reaches the browser) — this only formats what the API already sent.
-function appendMemberDetailsPanel(person) {
-  const panel = document.getElementById("memberDetailsPanel");
-  const cardsContainer = document.getElementById("memberDetailsCards");
+// Registry of currently-open floating detail cards: elementId -> {el, nodeId}.
+// Each card is a real HTML element (not canvas-drawn) absolutely positioned
+// over the network area, near the node it describes — kept in sync with that
+// node's current on-screen position via the afterDrawing event below, so it
+// tracks correctly through dragging, panning, and zooming.
+let detailBoxes = {};
+
+// Converts a node's canvas coordinates to DOM pixel coordinates (relative to
+// the network container) and offsets the card into nearby whitespace rather
+// than directly on top of the node. This is a best-effort offset, not a
+// guarantee of zero overlap — at high zoom-out, or in a dense cluster of
+// siblings, a card can still end up close to a neighboring node; there's no
+// way to know what's "empty space" on the canvas without inspecting every
+// other node's current screen position, which isn't attempted here.
+function positionDetailBox(el, nodeId) {
+  if (!network) return;
+  const pos = network.getPositions([nodeId])[nodeId];
+  if (!pos) return;
+  const domPos = network.canvasToDOM(pos);
+  el.style.left = (domPos.x + 26) + "px";
+  el.style.top = (domPos.y - 10) + "px";
+}
+
+function repositionAllDetailBoxes() {
+  Object.entries(detailBoxes).forEach(([, box]) => positionDetailBox(box.el, box.nodeId));
+}
+
+function removeDetailBox(elementId) {
+  const box = detailBoxes[elementId];
+  if (!box) return;
+  box.el.remove();
+  delete detailBoxes[elementId];
+}
+
+function clearAllDetailBoxes() {
+  Object.keys(detailBoxes).forEach(removeDetailBox);
+  detailBoxes = {};
+}
+
+// Creates a floating, bulleted, left-justified detail card near the
+// double-clicked node, directly in the main output window (overlaid on the
+// graph area, not a separate panel elsewhere on the page). other_info is
+// already PII-redacted server-side (dates, YoB, phone numbers, and
+// address-like text are stripped before this ever reaches the browser) —
+// this only formats what the API already sent.
+function createDetailBox(nodeId, person) {
+  const overlay = document.getElementById("networkOverlay");
 
   const card = document.createElement("div");
   card.className = "detail-card";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "close-btn";
+  closeBtn.textContent = "\u00D7";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.addEventListener("click", () => removeDetailBox(nodeId));
+  card.appendChild(closeBtn);
 
   const heading = document.createElement("h4");
   heading.textContent = displayName(person);
@@ -1115,13 +1167,9 @@ function appendMemberDetailsPanel(person) {
   ul.appendChild(otherLi);
   card.appendChild(ul);
 
-  cardsContainer.insertBefore(card, cardsContainer.firstChild);
-  panel.classList.add("show");
-}
-
-function clearMemberDetailsPanel() {
-  document.getElementById("memberDetailsCards").innerHTML = "";
-  document.getElementById("memberDetailsPanel").classList.remove("show");
+  overlay.appendChild(card);
+  detailBoxes[nodeId] = { el: card, nodeId };
+  positionDetailBox(card, nodeId);
 }
 
 // Places a newly-revealed spouse/child, OR reuses their existing node if
@@ -1198,7 +1246,7 @@ async function handleNodeDoubleClick(params) {
     if (!data.found) return;
 
     personByElementId[clickedId] = { ...personByElementId[clickedId], ...data.person };
-    appendMemberDetailsPanel(data.person);
+    createDetailBox(clickedId, data.person);
     addExpansionResults(clickedId, data.spouses || [], data.children || []);
   } catch (err) {
     console.error("Expand failed:", err);
