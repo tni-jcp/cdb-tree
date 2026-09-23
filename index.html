@@ -237,6 +237,20 @@
      panel below it. overflow: visible so a card near the edge of the
      network area isn't clipped. */
   .network-wrapper { position: relative; overflow: visible; }
+  #networkLines {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+  .detail-link-line {
+    stroke: var(--ink-soft);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+    fill: none;
+  }
   #networkOverlay {
     position: absolute;
     inset: 0;
@@ -384,6 +398,7 @@
     </div>
     <div class="network-wrapper">
       <div id="network"></div>
+      <svg id="networkLines"></svg>
       <div id="networkOverlay"></div>
     </div>
     <div class="legend">
@@ -1104,6 +1119,7 @@ function computeRowRightEdges(nodesData) {
 // node's current on-screen position via the afterDrawing event below, so it
 // tracks correctly through dragging, panning, and zooming.
 let detailBoxes = {};
+let detailLines = {}; // nodeId -> SVG <line> element connecting the node to its detail card
 
 // Converts a node's canvas coordinates to DOM pixel coordinates (relative to
 // the network container) and offsets the card into nearby whitespace rather
@@ -1121,10 +1137,51 @@ function positionDetailBox(el, nodeId) {
   el.style.top = (domPos.y - 10) + "px";
 }
 
+// Creates the dashed SVG line connecting a node to its floating detail card,
+// so the association stays visually clear even after the card has been
+// dragged away from the node. Anchors at the box's top-left corner (plus a
+// small inset toward its heading) rather than measuring the box's actual
+// rendered size — keeps this purely arithmetic and independent of layout
+// timing, at the cost of not being perfectly centered on the box.
+function createDetailLine(nodeId) {
+  const svg = document.getElementById("networkLines");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("class", "detail-link-line");
+  svg.appendChild(line);
+  detailLines[nodeId] = line;
+  updateDetailLine(nodeId);
+}
+
+function updateDetailLine(nodeId) {
+  const line = detailLines[nodeId];
+  const box = detailBoxes[nodeId];
+  if (!line || !box || !network) return;
+  const pos = network.getPositions([nodeId])[nodeId];
+  if (!pos) return;
+  const domPos = network.canvasToDOM(pos);
+  const boxLeft = parseFloat(box.el.style.left) || 0;
+  const boxTop = parseFloat(box.el.style.top) || 0;
+  line.setAttribute("x1", domPos.x);
+  line.setAttribute("y1", domPos.y);
+  line.setAttribute("x2", boxLeft + 10);
+  line.setAttribute("y2", boxTop + 15);
+}
+
+function removeDetailLine(nodeId) {
+  const line = detailLines[nodeId];
+  if (!line) return;
+  line.remove();
+  delete detailLines[nodeId];
+}
+
+// Called on every canvas redraw (afterDrawing) — the NODE's position can
+// change due to node dragging, panning, or zooming regardless of whether the
+// box itself has been manually positioned, so the line always needs
+// updating even for a box that's no longer auto-following its node.
 function repositionAllDetailBoxes() {
-  Object.entries(detailBoxes).forEach(([, box]) => {
-    if (box.userPositioned) return; // user has manually dragged this one — stop auto-following its node
-    positionDetailBox(box.el, box.nodeId);
+  Object.entries(detailBoxes).forEach(([nodeId, box]) => {
+    if (!box.userPositioned) positionDetailBox(box.el, box.nodeId);
+    updateDetailLine(nodeId);
   });
 }
 
@@ -1133,6 +1190,7 @@ function removeDetailBox(elementId) {
   if (!box) return;
   box.el.remove();
   delete detailBoxes[elementId];
+  removeDetailLine(elementId);
 }
 
 function clearAllDetailBoxes() {
@@ -1173,6 +1231,7 @@ function makeDraggable(card, handle, nodeId) {
     const dy = point.clientY - startY;
     card.style.left = (startLeft + dx) + "px";
     card.style.top = (startTop + dy) + "px";
+    updateDetailLine(nodeId);
     e.preventDefault();
   }
   function onPointerUp() {
@@ -1225,6 +1284,7 @@ function createDetailBox(nodeId, person) {
   detailBoxes[nodeId] = { el: card, nodeId, userPositioned: false };
   positionDetailBox(card, nodeId);
   makeDraggable(card, heading, nodeId);
+  createDetailLine(nodeId);
 }
 
 // Places a newly-revealed spouse/child, OR reuses their existing node if
