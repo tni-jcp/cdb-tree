@@ -269,6 +269,7 @@
   .detail-card {
     position: absolute;
     pointer-events: auto; /* the card itself IS interactive (close button, text selection) */
+    transform-origin: top left;
     width: 230px;
     min-width: 160px;
     min-height: 80px;
@@ -1177,13 +1178,41 @@ let detailLines = {}; // nodeId -> SVG <line> element connecting the node to its
 // siblings, a card can still end up close to a neighboring node; there's no
 // way to know what's "empty space" on the canvas without inspecting every
 // other node's current screen position, which isn't attempted here.
+// Reads the network's current zoom factor (1.0 = default, >1 = zoomed in,
+// <1 = zoomed out), clamped to a readable range so an extreme zoom-out
+// doesn't shrink the card into illegible tininess, and an extreme zoom-in
+// doesn't blow it up past usefulness. Within that range, the card's size
+// tracks zoom directly, same as the nodes themselves.
+function getClampedNetworkScale() {
+  if (!network) return 1;
+  const raw = network.getScale();
+  return Math.max(0.4, Math.min(2.5, raw));
+}
+
 function positionDetailBox(el, nodeId) {
   if (!network) return;
   const pos = network.getPositions([nodeId])[nodeId];
   if (!pos) return;
   const domPos = network.canvasToDOM(pos);
-  el.style.left = (domPos.x + 26) + "px";
-  el.style.top = (domPos.y - 10) + "px";
+  const scale = getClampedNetworkScale();
+  // The node-offset scales with zoom too, so the card sits at a visually
+  // consistent distance from its node whether zoomed in or out — a fixed
+  // pixel offset would look increasingly cramped against the node at high
+  // zoom, or oddly distant from a now-tiny node at low zoom.
+  el.style.left = (domPos.x + 26 * scale) + "px";
+  el.style.top = (domPos.y - 10 * scale) + "px";
+}
+
+// Visually scales a detail card to match the current zoom level, same as the
+// nodes themselves grow/shrink when zooming. transform-origin is set to the
+// card's top-left corner specifically so the scale grows/shrinks the box
+// FROM that fixed point — keeping left/top (and therefore the connector
+// line's anchor point, and positionDetailBox's own math) valid and
+// unaffected by the transform, rather than the box scaling from its center
+// and drifting away from where it was actually positioned.
+function updateDetailCardScale(el) {
+  const scale = getClampedNetworkScale();
+  el.style.transform = `scale(${scale})`;
 }
 
 // Creates the dashed SVG line connecting a node to its floating detail card,
@@ -1208,12 +1237,13 @@ function updateDetailLine(nodeId) {
   const pos = network.getPositions([nodeId])[nodeId];
   if (!pos) return;
   const domPos = network.canvasToDOM(pos);
+  const scale = getClampedNetworkScale();
   const boxLeft = parseFloat(box.el.style.left) || 0;
   const boxTop = parseFloat(box.el.style.top) || 0;
   line.setAttribute("x1", domPos.x);
   line.setAttribute("y1", domPos.y);
-  line.setAttribute("x2", boxLeft + 10);
-  line.setAttribute("y2", boxTop + 15);
+  line.setAttribute("x2", boxLeft + 10 * scale);
+  line.setAttribute("y2", boxTop + 15 * scale);
 }
 
 function removeDetailLine(nodeId) {
@@ -1230,6 +1260,7 @@ function removeDetailLine(nodeId) {
 function repositionAllDetailBoxes() {
   Object.entries(detailBoxes).forEach(([nodeId, box]) => {
     if (!box.userPositioned) positionDetailBox(box.el, box.nodeId);
+    updateDetailCardScale(box.el); // always applies — a dragged card still scales with zoom, it just doesn't re-follow the node's x/y
     updateDetailLine(nodeId);
   });
 }
@@ -1325,8 +1356,16 @@ function makeResizable(card, handle, nodeId) {
   function onPointerMove(e) {
     if (!resizing) return;
     const point = pointFromEvent(e);
-    const dx = point.clientX - startX;
-    const dy = point.clientY - startY;
+    const scale = getClampedNetworkScale();
+    // card.offsetWidth/Height (used for startWidth/startHeight above) are
+    // always the PRE-transform size — CSS transforms never affect offsetWidth/
+    // offsetHeight, only how the element is painted. But the actual on-screen
+    // drag distance (clientX/clientY) is happening at the CURRENT zoom scale,
+    // so it has to be un-scaled back to the card's own coordinate space —
+    // otherwise resizing at 2x zoom would grow the (pre-transform) box twice
+    // as fast as the cursor actually moved, feeling disconnected from the drag.
+    const dx = (point.clientX - startX) / scale;
+    const dy = (point.clientY - startY) / scale;
     card.style.width = Math.max(MIN_WIDTH, startWidth + dx) + "px";
     card.style.height = Math.max(MIN_HEIGHT, startHeight + dy) + "px";
     updateDetailLine(nodeId); // top-left doesn't move, but keep this independent of how the anchor is computed
@@ -1384,6 +1423,7 @@ function createDetailBox(nodeId, person) {
   overlay.appendChild(card);
   detailBoxes[nodeId] = { el: card, nodeId, userPositioned: false };
   positionDetailBox(card, nodeId);
+  updateDetailCardScale(card);
   makeDraggable(card, heading, nodeId);
   makeResizable(card, resizeHandle, nodeId);
   createDetailLine(nodeId);

@@ -5,7 +5,7 @@
 // /api/ — relationship and location data must always come from the live
 // backend, never a stale cached response.
 
-const CACHE_NAME = "chalakuzhy-shell-v2";
+const CACHE_NAME = "chalakuzhy-shell-v4";
 
 const SHELL_ASSETS = [
   "./",
