@@ -318,7 +318,7 @@
       <div class="branch-note" id="branchNote"></div>
     </div>
     <div class="network-toolbar">
-      <span class="network-hint">Drag any node to rearrange the tree.</span>
+      <span class="network-hint">Drag any node to rearrange the tree. Double-click a node to reveal their spouse, children, and details.</span>
       <button type="button" class="reset-btn" id="resetLayoutBtn">Reset arrangement</button>
     </div>
     <div id="network"></div>
@@ -353,6 +353,22 @@ const candidates2 = document.getElementById("candidates2");
 
 let network = null;
 let lastGraphArgs = null; // used by the "Reset arrangement" button to redraw the tidy layout
+
+// State for incremental drill-down (double-click expansion). These are all
+// reset fresh at the top of every renderGraph() call, so "Reset arrangement"
+// (which just calls renderGraph(lastGraphArgs) again) naturally discards any
+// expansion and goes back to the original search result.
+let liveNodes = null;             // the live vis.DataSet<node> — expansion adds to this directly, never rebuilds it
+let liveEdges = null;             // the live vis.DataSet<edge>
+let ginToElementId = {};          // gin -> elementId, so expanding toward someone already shown reuses their node
+let personByElementId = {};       // elementId -> last-known full person object (for building the expanded label)
+let rowRightEdge = {};            // level -> rightmost x currently occupied on that row, for placing new nodes
+let expandedElementIds = new Set(); // which nodes the user has already double-clicked (no-op on a repeat)
+let liveEdgeKeys = new Set();     // (from|to|type) keys already drawn, to avoid a duplicate edge on expansion
+
+const NODE_RADIUS = 16;
+const H_SPACING = 170;
+const V_SPACING = 130;
 
 // Resolution state per field: the gin the user has confirmed, and the input text
 // it was resolved from (so an edit to the text invalidates the cached resolution).
@@ -681,6 +697,45 @@ function contrastTextColor(hexColor) {
   return luminance > 0.6 ? "#2b241a" : "#ffffff";
 }
 
+// Splits a label into lines on \n (used to separate name / Location / Other
+// Info once a node is expanded), then word-wraps each of those lines to a
+// max pixel width so a long MBR_OTHER_INFO sentence doesn't draw as one very
+// wide line overlapping neighboring nodes. Requires ctx.font to already be
+// set (measureText depends on it), which both callers below do first.
+function wrapText(ctx, text, maxWidth) {
+  const words = text.split(" ");
+  const lines = [];
+  let current = "";
+  words.forEach((word) => {
+    const test = current ? current + " " + word : word;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  });
+  if (current) lines.push(current);
+  return lines;
+}
+
+function drawWrappedExternalLabel(ctx, x, y, radius, label) {
+  if (!label) return;
+  ctx.save();
+  ctx.font = "13px Georgia, serif";
+  ctx.fillStyle = getCss("--ink");
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  const wrapped = [];
+  label.split("\n").forEach((line) => {
+    wrapText(ctx, line, 200).forEach((sub) => wrapped.push(sub));
+  });
+  wrapped.forEach((line, i) => {
+    ctx.fillText(line, x, y + radius + 4 + i * 15);
+  });
+  ctx.restore();
+}
+
 // Custom vis-network node shapes (shape: "custom" + ctxRenderer), since the
 // built-in shapes can't render a half-and-half circle. IMPORTANT: unlike
 // built-in shapes, a "custom" shape does NOT get its label drawn
@@ -710,14 +765,7 @@ function makeSplitCircleRenderer(topColor, bottomColor, borderColor, radius) {
         ctx.restore();
       },
       drawExternalLabel: function () {
-        if (!label) return;
-        ctx.save();
-        ctx.font = "13px Georgia, serif";
-        ctx.fillStyle = getCss("--ink");
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillText(label, x, y + radius + 4);
-        ctx.restore();
+        drawWrappedExternalLabel(ctx, x, y, radius, label);
       },
       nodeDimensions: { width: radius * 2, height: radius * 2 },
     };
@@ -739,14 +787,7 @@ function makeSolidCircleRenderer(fillColor, borderColor, radius) {
         ctx.restore();
       },
       drawExternalLabel: function () {
-        if (!label) return;
-        ctx.save();
-        ctx.font = "13px Georgia, serif";
-        ctx.fillStyle = getCss("--ink");
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillText(label, x, y + radius + 4);
-        ctx.restore();
+        drawWrappedExternalLabel(ctx, x, y, radius, label);
       },
       nodeDimensions: { width: radius * 2, height: radius * 2 },
     };
@@ -811,8 +852,6 @@ function computeLevels(people, rels) {
 // layout enabled) makes every node freely draggable anywhere afterward,
 // Bloom-style, while still opening on a clean, readable arrangement.
 function computeGraphLayout(nodesData) {
-  const H_SPACING = 170;
-  const V_SPACING = 130;
   const byLevel = {};
   nodesData.forEach((n) => {
     const lvl = n.level || 0;
@@ -827,6 +866,45 @@ function computeGraphLayout(nodesData) {
       n.y = Number(lvlKey) * V_SPACING;
     });
   });
+}
+
+// Builds a single person node object. posOverride (optional {x,y}) is used
+// only for incremental expansion (double-click drill-down), where the new
+// node's position is computed directly rather than via computeGraphLayout —
+// for an initial full render, x/y are left unset here and assigned
+// afterward by computeGraphLayout() for the whole node list at once.
+function buildPersonNode(p, id, level, isFounder, posOverride) {
+  const ctxRenderer = isFounder
+    ? makeSolidCircleRenderer("#ffffff", getCss("--ink"), NODE_RADIUS)
+    : makeSplitCircleRenderer(branchColor(p.branch_name), genderColor(p.gender), getCss("--ink"), NODE_RADIUS);
+  const node = {
+    id,
+    label: displayName(p),
+    level,
+    shape: "custom",
+    ctxRenderer,
+    font: { color: getCss("--ink"), face: "Georgia" },
+  };
+  if (posOverride) {
+    node.x = posOverride.x;
+    node.y = posOverride.y;
+  }
+  return node;
+}
+
+function buildPersonEdge(r) {
+  return {
+    from: r.startNodeElementId,
+    to: r.endNodeElementId,
+    label: (r.display_type || r.type).replace(/_/g, " "),
+    color: { color: relColor(r.type) },
+    font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
+    arrows: r.type === "PARENT_OF" ? "to" : "",
+  };
+}
+
+function edgeKey(r) {
+  return `${r.startNodeElementId}|${r.endNodeElementId}|${r.type}`;
 }
 
 function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin, founderChildren }) {
@@ -846,26 +924,24 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   const edges = [];
   const seen = new Set();
   const levels = computeLevels(allPeople, allRels);
-  const NODE_RADIUS = 16;
+
+  // A fresh full render always discards any prior double-click expansion —
+  // this is also what makes "Reset arrangement" (which just calls
+  // renderGraph(lastGraphArgs) again) correctly drop expansions too.
+  ginToElementId = {};
+  personByElementId = {};
+  expandedElementIds = new Set();
+  liveEdgeKeys = new Set();
 
   allPeople.forEach((p) => {
     const id = p.elementId;
     if (seen.has(id)) return;
     seen.add(id);
+    ginToElementId[p.gin] = id;
+    personByElementId[id] = p;
 
     const isFounder = founderGin && p.gin === founderGin;
-    const ctxRenderer = isFounder
-      ? makeSolidCircleRenderer("#ffffff", getCss("--ink"), NODE_RADIUS)
-      : makeSplitCircleRenderer(branchColor(p.branch_name), genderColor(p.gender), getCss("--ink"), NODE_RADIUS);
-
-    nodes.push({
-      id,
-      label: displayName(p),
-      level: levels[id],
-      shape: "custom",
-      ctxRenderer,
-      font: { color: getCss("--ink"), face: "Georgia" },
-    });
+    nodes.push(buildPersonNode(p, id, levels[id], isFounder));
   });
 
   // Draw each edge using the relationship's own true start/end — this is what
@@ -879,19 +955,11 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   // already an ancestor on the main path — so every child can get its own
   // branch box. That means the same PARENT_OF edge can arrive twice (once via
   // root_chain_rels, once via founderChildren); this Set keeps only one.
-  const seenEdgeKey = new Set();
   allRels.forEach((r) => {
-    const key = `${r.startNodeElementId}|${r.endNodeElementId}|${r.type}`;
-    if (seenEdgeKey.has(key)) return;
-    seenEdgeKey.add(key);
-    edges.push({
-      from: r.startNodeElementId,
-      to: r.endNodeElementId,
-      label: (r.display_type || r.type).replace(/_/g, " "),
-      color: { color: relColor(r.type) },
-      font: { size: 10, color: getCss("--ink-soft"), strokeWidth: 0 },
-      arrows: r.type === "PARENT_OF" ? "to" : "",
-    });
+    const key = edgeKey(r);
+    if (liveEdgeKeys.has(key)) return;
+    liveEdgeKeys.add(key);
+    edges.push(buildPersonEdge(r));
   });
 
   const addedBranchIds = new Set();
@@ -932,9 +1000,12 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   renderBranchLegend(branchesUsed);
 
   computeGraphLayout(nodes);
+  rowRightEdge = computeRowRightEdges(nodes);
 
   const container = document.getElementById("network");
-  const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+  liveNodes = new vis.DataSet(nodes);
+  liveEdges = new vis.DataSet(edges);
+  const data = { nodes: liveNodes, edges: liveEdges };
   const options = {
     physics: { enabled: false },   // positions come from computeGraphLayout, not simulation
     interaction: { hover: true, zoomView: true, dragView: true, multiselect: true },
@@ -944,7 +1015,127 @@ function renderGraph({ people, rels, rootChainPeople, rootChainRels, founderGin,
   };
   if (network) network.destroy();
   network = new vis.Network(container, data, options);
+  network.on("doubleClick", handleNodeDoubleClick);
 }
+
+// Records the rightmost x currently occupied on each row (level), from a
+// freshly laid-out node list. Used afterward by incremental expansion to
+// place new nodes past whatever's already there on that row, rather than
+// overlapping them.
+function computeRowRightEdges(nodesData) {
+  const edges = {};
+  nodesData.forEach((n) => {
+    if (typeof n.x !== "number") return; // branch boxes etc. always have x by this point too, but guard anyway
+    const lvl = n.level || 0;
+    if (edges[lvl] === undefined || n.x > edges[lvl]) edges[lvl] = n.x;
+  });
+  return edges;
+}
+
+// Truncates a long MBR_OTHER_INFO value for the node label — wrapText still
+// wraps it to multiple lines, but a very long field could otherwise draw an
+// excessively tall label under one node.
+function truncateForLabel(text, maxChars) {
+  if (!text) return text;
+  return text.length > maxChars ? text.slice(0, maxChars - 3) + "..." : text;
+}
+
+function buildExpandedLabel(person) {
+  const nameLine = displayName(person);
+  const locLine = `Location: ${person.location || "Not Available"}`;
+  const otherLine = `Other Info: ${truncateForLabel(person.other_info, 160) || "Not Available"}`;
+  return `${nameLine}\n${locLine}\n${otherLine}`;
+}
+
+// Updates an already-shown node's own label to include its Location / Other
+// Info once the user has double-clicked it — everyone else keeps the plain
+// name-only label until they too are expanded.
+function updateNodeToExpandedLabel(elementId, person) {
+  liveNodes.update({ id: elementId, label: buildExpandedLabel(person) });
+  personByElementId[elementId] = { ...personByElementId[elementId], ...person };
+}
+
+// Places a newly-revealed spouse/child, OR reuses their existing node if
+// they're already shown elsewhere in the graph (e.g. expansion leads back to
+// someone already on the searched path) — in which case only a new edge is
+// added, never a duplicate node.
+function placeOrReuseNode(person, level, anchorX, newNodesOut) {
+  const existingId = ginToElementId[person.gin];
+  if (existingId) return existingId;
+
+  const id = person.elementId;
+  ginToElementId[person.gin] = id;
+  personByElementId[id] = person;
+
+  const startX = rowRightEdge[level] !== undefined ? rowRightEdge[level] + H_SPACING : anchorX;
+  rowRightEdge[level] = startX;
+  const y = level * V_SPACING;
+
+  newNodesOut.push(buildPersonNode(person, id, level, false, { x: startX, y }));
+  return id;
+}
+
+function addEdgeIfNew(r, newEdgesOut) {
+  const key = edgeKey(r);
+  if (liveEdgeKeys.has(key)) return;
+  liveEdgeKeys.add(key);
+  newEdgesOut.push(buildPersonEdge(r));
+}
+
+// Adds a double-clicked member's spouse(s) and children directly to the live
+// running network — never a full rebuild, so anything the user has already
+// dragged stays exactly where they put it. Spouses land on the same row as
+// the anchor; children land one row below.
+function addExpansionResults(anchorElementId, spouseEntries, childEntries) {
+  const anchorNode = liveNodes.get(anchorElementId);
+  const anchorLevel = anchorNode ? (anchorNode.level || 0) : 0;
+  const anchorX = anchorNode ? anchorNode.x : 0;
+
+  const newNodes = [];
+  const newEdges = [];
+
+  spouseEntries.forEach((entry) => {
+    placeOrReuseNode(entry.person, anchorLevel, anchorX, newNodes);
+    addEdgeIfNew(entry.rel, newEdges);
+  });
+
+  childEntries.forEach((entry) => {
+    placeOrReuseNode(entry.person, anchorLevel + 1, anchorX, newNodes);
+    addEdgeIfNew(entry.rel, newEdges);
+  });
+
+  if (newNodes.length) liveNodes.add(newNodes);
+  if (newEdges.length) liveEdges.add(newEdges);
+}
+
+// Double-click drill-down: fetches the clicked member's spouse/children and
+// full detail, then extends the live tree in place — recursion falls out
+// naturally, since this same handler applies to every node, including ones
+// added by a previous expansion.
+async function handleNodeDoubleClick(params) {
+  if (!params.nodes || params.nodes.length !== 1) return; // only a genuine single-node double-click
+  const clickedId = params.nodes[0];
+  if (String(clickedId).startsWith("branch_")) return; // branch boxes aren't expandable
+
+  if (expandedElementIds.has(clickedId)) return; // already expanded — no-op, per the confirmed design
+
+  const person = personByElementId[clickedId];
+  if (!person || !person.gin) return;
+
+  expandedElementIds.add(clickedId);
+
+  try {
+    const data = await apiGet("/api/member-expand", { gin: person.gin });
+    if (!data.found) return;
+
+    updateNodeToExpandedLabel(clickedId, data.person);
+    addExpansionResults(clickedId, data.spouses || [], data.children || []);
+  } catch (err) {
+    console.error("Expand failed:", err);
+    expandedElementIds.delete(clickedId); // allow retrying on failure
+  }
+}
+
 
 // Populates the dynamic per-query branch-color key below the graph — the
 // top-half node color and branch box color are assigned per branch (via
