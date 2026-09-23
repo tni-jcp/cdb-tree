@@ -260,6 +260,9 @@
     position: absolute;
     pointer-events: auto; /* the card itself IS interactive (close button, text selection) */
     width: 230px;
+    min-width: 160px;
+    min-height: 80px;
+    overflow: auto;
     background: #fffdf7;
     border: 1px solid var(--line);
     border-left: 4px solid var(--accent);
@@ -268,6 +271,21 @@
     box-shadow: 0 2px 8px rgba(43,36,26,0.18);
     z-index: 5;
   }
+  .detail-card .resize-handle {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    background: repeating-linear-gradient(
+      135deg,
+      transparent 0px, transparent 2px,
+      var(--ink-soft) 2px, var(--ink-soft) 3px
+    );
+    opacity: 0.55;
+  }
+  .detail-card .resize-handle:hover { opacity: 1; }
   .detail-card .close-btn {
     position: absolute;
     top: 0.3rem;
@@ -1247,6 +1265,54 @@ function makeDraggable(card, handle, nodeId) {
   document.addEventListener("touchend", onPointerUp);
 }
 
+// Lets the user resize a detail card from its bottom-right corner, the same
+// way the card can be dragged to move — custom JS rather than CSS's native
+// `resize: both`, since that has no usable touch affordance on mobile
+// browsers, and this app is installed as a PWA on phones. Growing/shrinking
+// happens from the bottom-right corner, so the card's top-left position
+// (left/top, which the connector line anchors to) never changes here.
+function makeResizable(card, handle, nodeId) {
+  const MIN_WIDTH = 160;
+  const MIN_HEIGHT = 80;
+  let resizing = false;
+  let startX, startY, startWidth, startHeight;
+
+  function pointFromEvent(e) {
+    return e.touches ? e.touches[0] : e;
+  }
+
+  function onPointerDown(e) {
+    resizing = true;
+    const point = pointFromEvent(e);
+    startX = point.clientX;
+    startY = point.clientY;
+    startWidth = card.offsetWidth;
+    startHeight = card.offsetHeight;
+    e.preventDefault();
+    e.stopPropagation(); // don't also trigger the card's move-drag via the heading
+  }
+  function onPointerMove(e) {
+    if (!resizing) return;
+    const point = pointFromEvent(e);
+    const dx = point.clientX - startX;
+    const dy = point.clientY - startY;
+    card.style.width = Math.max(MIN_WIDTH, startWidth + dx) + "px";
+    card.style.height = Math.max(MIN_HEIGHT, startHeight + dy) + "px";
+    updateDetailLine(nodeId); // top-left doesn't move, but keep this independent of how the anchor is computed
+    e.preventDefault();
+  }
+  function onPointerUp() {
+    resizing = false;
+  }
+
+  handle.addEventListener("mousedown", onPointerDown);
+  document.addEventListener("mousemove", onPointerMove);
+  document.addEventListener("mouseup", onPointerUp);
+  handle.addEventListener("touchstart", onPointerDown, { passive: false });
+  document.addEventListener("touchmove", onPointerMove, { passive: false });
+  document.addEventListener("touchend", onPointerUp);
+}
+
 // Creates a floating, bulleted, left-justified detail card near the
 // double-clicked node, directly in the main output window (overlaid on the
 // graph area, not a separate panel elsewhere on the page). other_info is
@@ -1280,10 +1346,15 @@ function createDetailBox(nodeId, person) {
   ul.appendChild(otherLi);
   card.appendChild(ul);
 
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "resize-handle";
+  card.appendChild(resizeHandle);
+
   overlay.appendChild(card);
   detailBoxes[nodeId] = { el: card, nodeId, userPositioned: false };
   positionDetailBox(card, nodeId);
   makeDraggable(card, heading, nodeId);
+  makeResizable(card, resizeHandle, nodeId);
   createDetailLine(nodeId);
 }
 
