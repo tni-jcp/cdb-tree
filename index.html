@@ -97,7 +97,7 @@
     padding: 0.05rem 0.3rem;
     border-radius: 2px;
   }
-  form.search {
+  .search {
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
@@ -388,7 +388,7 @@
     asked to pick which one you meant before the relationship search runs.
   </div>
 
-  <form class="search" id="searchForm">
+  <div class="search" id="searchForm">
     <div class="field" id="field1">
       <label for="name1">Person 1</label>
       <input type="text" id="name1" placeholder="e.g. Mammen (typos OK)" required autocomplete="off">
@@ -399,8 +399,8 @@
       <input type="text" id="name2" placeholder="e.g. Cherian (typos OK)" required autocomplete="off">
       <div class="candidates" id="candidates2"></div>
     </div>
-    <button type="submit" class="go" id="goBtn">Find relationship</button>
-  </form>
+    <button type="button" class="go" id="goBtn">Find relationship</button>
+  </div>
 
   <div id="status"></div>
 
@@ -590,7 +590,15 @@ async function resolveField(fieldNum, text) {
 async function attemptSearch() {
   const text1 = name1Input.value.trim();
   const text2 = name2Input.value.trim();
-  if (!text1 || !text2) return;
+  if (!text1 || !text2) {
+    // Previously the browser's native <form> "required" validation caught
+    // this with its own popup before attemptSearch() ever ran; removing the
+    // <form> element (done to stop Safari's unrelated "changes will be
+    // lost" close-tab warning) also removed that native check, so this
+    // explicit message replaces it.
+    showError("Enter both names to search.");
+    return;
+  }
 
   goBtn.disabled = true;
   statusEl.className = "";
@@ -655,9 +663,22 @@ async function attemptSearch() {
   }
 }
 
-document.getElementById("searchForm").addEventListener("submit", (e) => {
-  e.preventDefault();
+document.getElementById("goBtn").addEventListener("click", () => {
   attemptSearch();
+});
+
+// No <form> element wraps these inputs anymore (removing it is what stops
+// Safari's native "you have entered text, changes will be lost" warning on
+// tab/window close, since that warning is specifically tied to <form> +
+// <input>). That means Enter no longer submits automatically the way a real
+// form would — this restores the expected keyboard behavior explicitly.
+[name1Input, name2Input].filter(Boolean).forEach((el) => {
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      attemptSearch();
+    }
+  });
 });
 
 document.getElementById("resetLayoutBtn").addEventListener("click", () => {

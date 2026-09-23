@@ -92,7 +92,7 @@
     margin-bottom: 1.4rem;
   }
 
-  form.search {
+  .search {
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
@@ -265,7 +265,7 @@
     one record, you'll be asked to pick which one you meant.
   </div>
 
-  <form class="search" id="searchForm">
+  <div class="search" id="searchForm">
     <div class="field" id="nameField">
       <label for="nameInput">Family Member Name</label>
       <input type="text" id="nameInput" placeholder="e.g. Mammen (typos OK)" autocomplete="off">
@@ -277,8 +277,8 @@
       <input type="text" id="placeInput" placeholder="e.g. Kottayam, or India (typos OK)" autocomplete="off">
       <div class="candidates" id="placeCandidates"></div>
     </div>
-    <button type="submit" class="go" id="goBtn">Find Family Nearby</button>
-  </form>
+    <button type="button" class="go" id="goBtn">Find Family Nearby</button>
+  </div>
 
   <div id="status"></div>
 
@@ -556,9 +556,22 @@ async function runSearch(resolved) {
   }
 }
 
-document.getElementById("searchForm").addEventListener("submit", (e) => {
-  e.preventDefault();
+goBtn.addEventListener("click", () => {
   attemptSearch();
+});
+
+// No <form> element wraps these inputs anymore (removing it is what stops
+// Safari's native "you have entered text, changes will be lost" warning on
+// tab/window close, since that warning is specifically tied to <form> +
+// <input>). That means Enter no longer submits automatically the way a real
+// form would — this restores the expected keyboard behavior explicitly.
+[nameInput, placeInput].forEach((el) => {
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      attemptSearch();
+    }
+  });
 });
 
 // --- Rendering results ---
