@@ -273,7 +273,10 @@
     font-size: 0.92rem;
     font-weight: 400;
     color: var(--ink);
+    cursor: grab;
+    user-select: none;
   }
+  .detail-card h4.dragging { cursor: grabbing; }
   .detail-card ul {
     margin: 0;
     padding-left: 1.1rem;
@@ -1119,7 +1122,10 @@ function positionDetailBox(el, nodeId) {
 }
 
 function repositionAllDetailBoxes() {
-  Object.entries(detailBoxes).forEach(([, box]) => positionDetailBox(box.el, box.nodeId));
+  Object.entries(detailBoxes).forEach(([, box]) => {
+    if (box.userPositioned) return; // user has manually dragged this one — stop auto-following its node
+    positionDetailBox(box.el, box.nodeId);
+  });
 }
 
 function removeDetailBox(elementId) {
@@ -1132,6 +1138,54 @@ function removeDetailBox(elementId) {
 function clearAllDetailBoxes() {
   Object.keys(detailBoxes).forEach(removeDetailBox);
   detailBoxes = {};
+}
+
+// Makes a detail card draggable anywhere within the network area, the same
+// way graph nodes can be dragged — using the heading as the drag handle, so
+// dragging doesn't interfere with selecting the card's text content. Once
+// dragged, the box is flagged userPositioned so repositionAllDetailBoxes()
+// stops auto-following its node — otherwise the next canvas redraw (which
+// happens continuously during any pan/zoom/node-drag) would immediately snap
+// the box back to its node-relative position, fighting the user's drag.
+function makeDraggable(card, handle, nodeId) {
+  let dragging = false;
+  let startX, startY, startLeft, startTop;
+
+  function pointFromEvent(e) {
+    return e.touches ? e.touches[0] : e;
+  }
+
+  function onPointerDown(e) {
+    dragging = true;
+    const point = pointFromEvent(e);
+    startX = point.clientX;
+    startY = point.clientY;
+    startLeft = parseFloat(card.style.left) || 0;
+    startTop = parseFloat(card.style.top) || 0;
+    if (detailBoxes[nodeId]) detailBoxes[nodeId].userPositioned = true;
+    handle.classList.add("dragging");
+    e.preventDefault();
+  }
+  function onPointerMove(e) {
+    if (!dragging) return;
+    const point = pointFromEvent(e);
+    const dx = point.clientX - startX;
+    const dy = point.clientY - startY;
+    card.style.left = (startLeft + dx) + "px";
+    card.style.top = (startTop + dy) + "px";
+    e.preventDefault();
+  }
+  function onPointerUp() {
+    dragging = false;
+    handle.classList.remove("dragging");
+  }
+
+  handle.addEventListener("mousedown", onPointerDown);
+  document.addEventListener("mousemove", onPointerMove);
+  document.addEventListener("mouseup", onPointerUp);
+  handle.addEventListener("touchstart", onPointerDown, { passive: false });
+  document.addEventListener("touchmove", onPointerMove, { passive: false });
+  document.addEventListener("touchend", onPointerUp);
 }
 
 // Creates a floating, bulleted, left-justified detail card near the
@@ -1168,8 +1222,9 @@ function createDetailBox(nodeId, person) {
   card.appendChild(ul);
 
   overlay.appendChild(card);
-  detailBoxes[nodeId] = { el: card, nodeId };
+  detailBoxes[nodeId] = { el: card, nodeId, userPositioned: false };
   positionDetailBox(card, nodeId);
+  makeDraggable(card, heading, nodeId);
 }
 
 // Places a newly-revealed spouse/child, OR reuses their existing node if
@@ -1229,12 +1284,27 @@ function addExpansionResults(anchorElementId, spouseEntries, childEntries) {
 // full detail, then extends the live tree in place — recursion falls out
 // naturally, since this same handler applies to every node, including ones
 // added by a previous expansion.
+//
+// expandedElementIds tracks whether this node's spouse/children have EVER
+// been fetched and added to the tree — that only happens once, ever, so a
+// second double-click doesn't re-fetch or risk re-adding anything. Whether
+// the DETAIL BOX is currently open is tracked separately, via the
+// detailBoxes registry (closeDetailBox removes an entry from it but leaves
+// expandedElementIds untouched) — so closing the box and double-clicking
+// again reopens it from cached data, without re-hitting the API or
+// re-running expansion.
 async function handleNodeDoubleClick(params) {
   if (!params.nodes || params.nodes.length !== 1) return; // only a genuine single-node double-click
   const clickedId = params.nodes[0];
   if (String(clickedId).startsWith("branch_")) return; // branch boxes aren't expandable
 
-  if (expandedElementIds.has(clickedId)) return; // already expanded — no-op, per the confirmed design
+  if (expandedElementIds.has(clickedId)) {
+    if (!detailBoxes[clickedId]) {
+      const cachedPerson = personByElementId[clickedId];
+      if (cachedPerson) createDetailBox(clickedId, cachedPerson);
+    }
+    return; // spouse/children already added — never re-fetch, box is either open or just reopened above
+  }
 
   const person = personByElementId[clickedId];
   if (!person || !person.gin) return;
